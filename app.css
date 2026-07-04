@@ -70,10 +70,12 @@ h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
 .stepper{display:flex;align-items:stretch;gap:10px}
 .stepper button{flex:none;width:60px;background:var(--panel-2);border:1px solid var(--line-2);
   border-radius:14px;font-size:28px;font-weight:700;line-height:1}
-.stepper .val{flex:1;text-align:center;background:var(--panel-2);border:1px solid var(--line-2);
+.stepper .val{flex:1;min-width:0;text-align:center;background:var(--panel-2);border:1px solid var(--line-2);
   border-radius:14px;display:flex;flex-direction:column;justify-content:center;padding:8px}
-.stepper .val b{font-family:var(--round);font-size:34px;font-weight:800;letter-spacing:-.02em}
-.stepper .val small{color:var(--ink-2);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+.stepval{font-family:var(--round);font-size:34px;font-weight:800;letter-spacing:-.02em;
+  background:none;border:none;color:var(--ink);width:100%;text-align:center;padding:0;min-width:0}
+.stepval:focus{outline:none;color:var(--accent)}
+.stepper .val small{color:var(--ink-2);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
 
 /* rpe */
 .rpe{display:flex;gap:10px;margin-top:4px}
@@ -97,6 +99,21 @@ h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
 .info-i{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:50%;
   border:1px solid var(--ink-3);background:none;color:var(--ink-2);font-size:12px;font-style:italic;font-weight:700;
   line-height:1;vertical-align:middle;cursor:pointer}
+
+/* backdate + plan banners */
+.backdate{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:rgba(240,180,41,.12);border:1px solid rgba(240,180,41,.4);color:var(--warn);
+  border-radius:13px;padding:11px 14px;margin-bottom:14px;font-weight:600;font-size:14px}
+.backdate button{background:none;border:1px solid rgba(240,180,41,.5);color:var(--warn);
+  border-radius:9px;padding:6px 11px;font-size:13px;font-weight:600}
+.plan-banner{background:rgba(205,255,61,.08);border:1px solid rgba(205,255,61,.3);
+  border-radius:13px;padding:12px 14px;margin-bottom:14px}
+.plan-item{display:flex;align-items:center;gap:10px;justify-content:space-between;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:8px}
+.plan-item > span{font-weight:600}
+.plan-item .tpl-pick{flex:1;text-align:left;background:none;border:none;color:inherit}
+.plan-item .rm{flex:none;width:34px;height:34px;border-radius:9px;background:var(--panel);
+  border:1px solid var(--line-2);color:var(--ink-2);font-size:15px}
 
 /* set list */
 .setrow{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line);
@@ -174,13 +191,14 @@ canvas{width:100%;height:auto;display:block;border-radius:12px}
 .cal-head button{width:42px;height:42px;border-radius:12px;background:var(--panel-2);
   border:1px solid var(--line-2);font-size:22px;color:var(--ink)}
 .cal-head button:active{transform:scale(.95)}
-.cal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:6px}
+.calbox{max-width:420px;margin:0 auto}
+.cal-dow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-bottom:6px}
 .cal-dow span{text-align:center;font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
 .cal-day{aspect-ratio:1;border-radius:11px;background:var(--panel-2);border:2px solid transparent;
-  color:var(--ink-2);font-size:15px;font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center}
-.cal-day.empty{background:none}
-.cal-day.has{color:var(--accent-ink);background:var(--accent);font-weight:800;cursor:pointer}
-.cal-day.has:active{transform:scale(.94)}
+  color:var(--ink-2);font-size:15px;font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.cal-day.empty{background:none;cursor:default}
+.cal-day.has{color:var(--accent-ink);background:var(--accent);font-weight:800}
+.cal-day.planned{border-color:var(--accent);color:var(--accent);font-weight:700;background:none}
+.cal-day:active{transform:scale(.94)}
 .cal-day.sel{border-color:var(--ink)}
-.cal-day:disabled{cursor:default}

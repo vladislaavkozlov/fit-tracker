@@ -13,14 +13,16 @@
   /* ---------- storage + миграция (логи не терять) ---------- */
   var KEY = 'fittracker.v1';
   var S = load();
-  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {} }; }
+  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {}, plans: [], templates: [] }; }
   function migrate(s) {
     s = s || blank();
     s.profile = s.profile || null;
     s.sessions = s.sessions || [];
     s.checkins = s.checkins || [];
     s.weighins = s.weighins || [];
-    s.equipment = s.equipment || {};                         // память типа снаряда за упражнением
+    s.equipment = s.equipment || {};                          // память типа снаряда за упражнением
+    s.plans = s.plans || [];                                  // планы на будущие/пустые дни (намерение, не факт)
+    s.templates = s.templates || [];                          // шаблоны тренировок
     s.sessions.forEach(function (ss) {
       (ss.sets || []).forEach(function (x) { if (!x.equipment) x.equipment = 'barbell'; });   // старые логи = штанга
     });
@@ -36,20 +38,18 @@
   function setEquip(x) { return x.equipment || 'barbell'; }
   function equipLabel(eq) { return eq === 'dumbbell' ? 'гантели' : eq === 'bodyweight' ? 'свой вес' : 'штанга'; }
   function currentBodyweight() { if (S.weighins && S.weighins.length) return S.weighins[S.weighins.length - 1].weight; return S.profile ? S.profile.weight : 0; }
-  function effWeight(x) {                                    // вес для расчёта 1ПМ (на один снаряд/руку)
+  function effWeight(x) {
     if (setEquip(x) === 'bodyweight') return (x.bodyAt || currentBodyweight() || 0) + (+x.weight || 0);
-    return +x.weight;                                        // штанга и гантель (на руку)
+    return +x.weight;
   }
   function setE1rm(x) { return E.e1rm(effWeight(x), x.reps); }
   function setTonnage(x) {
     if (!(x.reps > 0)) return 0;
     var v = effWeight(x) * x.reps;
-    return setEquip(x) === 'dumbbell' ? v * 2 : v;          // две гантели = ×2
+    return setEquip(x) === 'dumbbell' ? v * 2 : v;
   }
   function sessionTonnage(sess) { return (sess.sets || []).reduce(function (s, x) { return s + setTonnage(x); }, 0); }
-  function bestE1rmOf(sets) {
-    var b = null; sets.forEach(function (x) { var v = setE1rm(x); if (v != null && (b == null || v > b)) b = v; }); return b;
-  }
+  function bestE1rmOf(sets) { var b = null; sets.forEach(function (x) { var v = setE1rm(x); if (v != null && (b == null || v > b)) b = v; }); return b; }
   function weightPart(x) {
     var eq = setEquip(x);
     if (eq === 'dumbbell') return '2 × ' + x.weight + ' кг';
@@ -70,29 +70,28 @@
     else if (id === 'logger') renderLogger();
     else if (id === 'forecast') renderForecast();
     else if (id === 'diagnosis') renderDiagnosis();
-    else if (id === 'history') renderHistory();
+    else if (id === 'history') renderCalendar();
   }
 
   /* ---------- generic sheet ---------- */
   function openSheet(html) { $('#sheet').innerHTML = html; $('#sheet-bg').classList.add('show'); }
   function closeSheet() { $('#sheet-bg').classList.remove('show'); }
 
-  /* ---------- reusable stepper + rpe ---------- */
-  function stepper(key, unit, val, step) {
+  /* ---------- reusable stepper (кнопки + прямой ввод) + rpe ---------- */
+  function stepper(key, unit, val, step, mode) {
     return '<div class="field"><div class="stepper" data-step="' + key + '" data-inc="' + step + '">' +
       '<button type="button" data-dir="-1">−</button>' +
-      '<div class="val"><b class="mono" data-val>' + val + '</b><small>' + unit + '</small></div>' +
+      '<div class="val"><input type="text" class="stepval mono" data-val inputmode="' + (mode || 'decimal') + '" value="' + val + '"><small>' + unit + '</small></div>' +
       '<button type="button" data-dir="1">+</button></div></div>';
   }
   function bindStepperEl(box, state, onchange) {
     $$('.stepper', box).forEach(function (s) {
-      var key = s.dataset.step, inc = +s.dataset.inc, valEl = $('[data-val]', s);
-      $$('button', s).forEach(function (b) {
-        b.onclick = function () {
-          var v = +state[key] + (+b.dataset.dir) * inc; if (v < 0) v = 0;
-          state[key] = E.round(v, 2); valEl.textContent = state[key]; if (onchange) onchange();
-        };
-      });
+      var key = s.dataset.step, inc = +s.dataset.inc, input = $('[data-val]', s);
+      function commit(v) { if (isNaN(v)) v = 0; if (v < 0) v = 0; state[key] = E.round(v, 2); input.value = state[key]; if (onchange) onchange(); }
+      $$('button', s).forEach(function (b) { b.onclick = function () { commit(+state[key] + (+b.dataset.dir) * inc); }; });
+      input.addEventListener('input', function () { var v = parseFloat(input.value.replace(',', '.')); if (!isNaN(v)) { state[key] = E.round(v, 2); if (onchange) onchange(); } });
+      input.addEventListener('blur', function () { commit(parseFloat(input.value.replace(',', '.'))); });
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
     });
   }
   function rpePickerHtml(cur) {
@@ -194,7 +193,7 @@
   function renderToday() {
     var box = $('#today-body');
     var lastCheck = S.checkins[S.checkins.length - 1];
-    var todaySess = S.sessions.filter(function (s) { return s.date === todayStr(); })[0];
+    var todaySess = sessionOf(todayStr());
     var setsToday = todaySess ? todaySess.sets.length : 0;
     box.innerHTML = '';
 
@@ -212,11 +211,12 @@
     box.appendChild(ready);
 
     var act = el('div', 'card');
+    var plannedToday = planRemaining(todayStr());
     act.innerHTML = '<p class="eyebrow">Сегодня</p>' +
       '<h2 style="font-size:22px;margin-bottom:4px">' + (setsToday ? 'Тренировка идёт' : 'Готов тренироваться?') + '</h2>' +
-      '<p class="muted" style="margin:0 0 16px">' + (setsToday ? ('Записано подходов: ' + setsToday) : 'Логируй каждый подход в пару тапов') + '</p>';
+      '<p class="muted" style="margin:0 0 16px">' + (setsToday ? ('Записано подходов: ' + setsToday) : (plannedToday.length ? ('Запланировано: ' + plannedToday.map(function (it) { return it.exercise; }).join(', ')) : 'Логируй каждый подход в пару тапов')) + '</p>';
     var startBtn = el('button', 'btn', (setsToday ? 'Продолжить тренировку' : 'Начать тренировку'));
-    startBtn.onclick = function () { ensureSession(); go('logger'); };
+    startBtn.onclick = function () { logDate = null; go('logger'); };
     act.appendChild(startBtn);
     var ciBtn = el('button', 'btn ghost slim', 'Вечерний чек-ин: сон · калории · стресс');
     ciBtn.style.marginTop = '10px';
@@ -224,7 +224,7 @@
     act.appendChild(ciBtn);
     box.appendChild(act);
 
-    var recent = S.sessions.slice(-4).reverse();
+    var recent = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; }).slice(0, 4);
     if (recent.length) {
       var h = el('div', 'card');
       h.innerHTML = '<p class="eyebrow">Недавнее</p>';
@@ -234,7 +234,7 @@
           '<div class="meta">' + s.sets.length + ' подходов · ' + Math.round(sessionTonnage(s)) + ' кг тоннаж</div>';
         h.appendChild(r);
       });
-      var allBtn = el('button', 'btn ghost slim', 'Вся история в календаре →');
+      var allBtn = el('button', 'btn ghost slim', 'Открыть календарь →');
       allBtn.style.marginTop = '12px';
       allBtn.onclick = function () { go('history'); };
       h.appendChild(allBtn);
@@ -250,30 +250,46 @@
   }
   function stat(k, v) { return '<div class="stat"><div class="k">' + k + '</div><div class="v mono">' + v + '</div></div>'; }
 
-  function ensureSession() {
-    var s = S.sessions.filter(function (x) { return x.date === todayStr(); })[0];
-    if (!s) { s = { id: 'sess-' + Date.now(), date: todayStr(), sets: [] }; S.sessions.push(s); save(); }
+  function sessionOf(date) { return S.sessions.filter(function (x) { return x.date === date; })[0]; }
+  function ensureSession(date) {
+    date = date || activeDate();
+    var s = sessionOf(date);
+    if (!s) { s = { id: 'sess-' + date + '-' + Date.now(), date: date, sets: [] }; S.sessions.push(s); save(); }
     return s;
   }
 
+  /* ---------- планы (намерение, НЕ факт) ---------- */
+  function planFor(date) { return S.plans.filter(function (p) { return p.date === date; })[0]; }
+  function planRemaining(date) {
+    var p = planFor(date); if (!p) return [];
+    var s = sessionOf(date), done = {};
+    if (s) s.sets.forEach(function (x) { done[x.exercise] = 1; });
+    return p.items.filter(function (it) { return !done[it.exercise]; });
+  }
+
   /* ---------- Logger ---------- */
-  var logState = { exercise: 'Жим лёжа', equipment: 'barbell', weight: 60, reps: 8, rpe: null, note: '' };
+  var logState = { exercise: 'Жим лёжа', equipment: 'barbell', weight: 60, reps: 8, rpe: null, note: '', _pin: false };
+  var logDate = null;                                        // null = сегодня; иначе — запись задним числом
+  function activeDate() { return logDate || todayStr(); }
   function lastSetOf(name) {
-    for (var i = S.sessions.length - 1; i >= 0; i--) {
-      var ss = S.sessions[i].sets.filter(function (x) { return x.exercise === name && x.reps > 0; });
+    var sorted = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    for (var i = sorted.length - 1; i >= 0; i--) {
+      var ss = sorted[i].sets.filter(function (x) { return x.exercise === name && x.reps > 0; });
       if (ss.length) return ss[ss.length - 1];
     }
     return null;
   }
   function prefillFor(name) {
     logState.equipment = S.equipment[name] || logState.equipment || guessEquip(name);
+    if (logState._pin) { logState._pin = false; return; }   // значение пришло из плана — не перетирать
     var last = lastSetOf(name);
     if (last) { logState.weight = last.weight; logState.reps = last.reps; }
   }
   function recentExercises(n) {
     var out = [], seen = {};
-    for (var i = S.sessions.length - 1; i >= 0; i--) {
-      var sets = S.sessions[i].sets;
+    var sorted = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    for (var i = sorted.length - 1; i >= 0; i--) {
+      var sets = sorted[i].sets;
       for (var j = sets.length - 1; j >= 0; j--) {
         var nm = sets[j].exercise;
         if (!seen[nm]) { seen[nm] = 1; out.push(nm); if (out.length >= n) return out; }
@@ -282,27 +298,43 @@
     return out;
   }
   function renderLogger() {
-    ensureSession();
     var box = $('#logger-body');
     prefillFor(logState.exercise);
+    var date = activeDate();
+    var sess = sessionOf(date);
+    var hasSets = sess && sess.sets.length;
     var unit = logState.equipment === 'dumbbell' ? 'вес гантели, кг' : logState.equipment === 'bodyweight' ? 'довесок, кг' : 'вес, кг';
-    box.innerHTML =
+
+    var banner = '';
+    if (logDate && logDate !== todayStr()) banner += '<div class="backdate">Запись за ' + prettyDate(logDate) + '<button type="button" id="lg-exit">закрыть</button></div>';
+    var remaining = planRemaining(date);
+    if (remaining.length) banner += '<div class="plan-banner"><div class="lbl2" style="margin:0 0 8px">На ' + (date === todayStr() ? 'сегодня' : prettyDate(date)) + ' запланировано</div><div class="picklist" id="lg-plan">' +
+      remaining.map(function (it, i) { return '<button type="button" class="pick" data-pi="' + i + '">' + escapeHtml(it.exercise) + '</button>'; }).join('') + '</div></div>';
+
+    box.innerHTML = banner +
       '<div class="field"><label>Упражнение</label>' +
       '<button type="button" class="txt pickfield" id="lg-ex"><span>' + escapeHtml(logState.exercise) + '</span><span class="muted">' + equipLabel(logState.equipment) + ' ›</span></button></div>' +
-      '<div class="grid2">' + stepper('weight', unit, logState.weight, 2.5) + stepper('reps', 'повторы', logState.reps, 1) + '</div>' +
+      '<div class="grid2">' + stepper('weight', unit, logState.weight, 2.5, 'decimal') + stepper('reps', 'повторы', logState.reps, 1, 'numeric') + '</div>' +
       '<div id="e1rm-live" class="card" style="text-align:center;padding:14px;margin:4px 0 14px"></div>' +
       '<div class="field"><label>Как дался подход?</label>' + rpePickerHtml(logState.rpe) + '</div>' +
       '<div class="field"><input class="txt" id="lg-note" placeholder="Заметка (напр. подстраховали на последнем)" value="' + escapeHtml(logState.note || '') + '"></div>' +
       '<button class="btn" id="lg-add">✓ Записать подход</button>' +
       '<div id="lg-sets" style="margin-top:18px"></div>' +
-      '<button class="btn ghost slim" id="lg-finish" style="margin-top:8px">Завершить тренировку</button>';
+      '<div class="hr"></div>' +
+      (hasSets ? '<button class="btn ghost slim" id="lg-tpl-save">Сохранить как шаблон</button>' : '') +
+      (S.templates.length ? '<button class="btn ghost slim" id="lg-tpl-use" style="margin-top:10px">Начать по шаблону</button>' : '') +
+      '<button class="btn ghost slim" id="lg-finish" style="margin-top:10px">Завершить тренировку</button>';
 
-    $('#lg-ex').onclick = openExercisePicker;
+    if ($('#lg-exit')) $('#lg-exit').onclick = function () { logDate = null; go('history'); };
+    $$('#lg-plan .pick').forEach(function (b) { b.onclick = function () { var it = remaining[+b.dataset.pi]; logState.exercise = it.exercise; logState.equipment = it.equipment || S.equipment[it.exercise] || guessEquip(it.exercise); if (it.weight) logState.weight = it.weight; if (it.reps) logState.reps = it.reps; logState._pin = true; renderLogger(); }; });
+    $('#lg-ex').onclick = function () { openExercisePicker(); };
     bindStepperEl(box, logState, updateE1rmLive);
     bindRpe(box, logState);
     $('#lg-note').oninput = function () { logState.note = this.value; };
     $('#lg-add').onclick = addSet;
-    $('#lg-finish').onclick = function () { toast('Тренировка сохранена'); go('today'); };
+    if ($('#lg-tpl-save')) $('#lg-tpl-save').onclick = function () { openSaveTemplate(sessionOf(date).sets); };
+    if ($('#lg-tpl-use')) $('#lg-tpl-use').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
+    $('#lg-finish').onclick = function () { var back = logDate ? 'history' : 'today'; logDate = null; toast('Тренировка сохранена'); go(back); };
     updateE1rmLive();
     renderSetList();
   }
@@ -321,8 +353,10 @@
     }
   }
   function addSet() {
-    var sess = ensureSession();
-    var rec = { exercise: logState.exercise, equipment: logState.equipment, weight: +logState.weight, reps: +logState.reps, rpe: logState.rpe, note: (logState.note || '').trim(), ts: Date.now() };
+    var date = activeDate();
+    var sess = ensureSession(date);
+    var rec = { exercise: logState.exercise, equipment: logState.equipment, weight: +logState.weight, reps: +logState.reps, rpe: logState.rpe, note: (logState.note || '').trim() };
+    rec.ts = logDate ? (new Date(date).getTime() + sess.sets.length) : Date.now();
     if (logState.equipment === 'bodyweight') rec.bodyAt = currentBodyweight();
     sess.sets.push(rec); save();
     logState.note = ''; logState.rpe = null;
@@ -331,10 +365,11 @@
   }
   function renderSetList() {
     var box = $('#lg-sets'); if (!box) return;
-    var sess = S.sessions.filter(function (x) { return x.date === todayStr(); })[0];
+    var date = activeDate();
+    var sess = sessionOf(date);
     var sets = sess ? sess.sets : [];
-    if (!sets.length) { box.innerHTML = '<p class="muted" style="text-align:center">Пока нет подходов сегодня</p>'; return; }
-    box.innerHTML = '<p class="eyebrow">Сегодня · тап чтобы изменить</p>' + sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('');
+    if (!sets.length) { box.innerHTML = '<p class="muted" style="text-align:center">Пока нет подходов' + (logDate ? ' за этот день' : ' сегодня') + '</p>'; return; }
+    box.innerHTML = '<p class="eyebrow">' + (logDate && logDate !== todayStr() ? prettyDate(date) : 'Сегодня') + ' · тап чтобы изменить</p>' + sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('');
     $$('#lg-sets .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, renderLogger); }; });
   }
   function setRowHtml(x, sid, idx) {
@@ -346,8 +381,8 @@
       '</div><div class="meta">' + meta + '</div></button>';
   }
 
-  /* ---------- exercise picker + equipment (bottom sheet) ---------- */
-  function openExercisePicker() {
+  /* ---------- exercise picker + equipment ---------- */
+  function openExercisePicker(onPick) {
     var recent = recentExercises(6);
     var rest = EXERCISES.filter(function (n) { return recent.indexOf(n) < 0; });
     var html = '<p class="eyebrow">Упражнение</p><h2 style="margin-bottom:12px">Что делаешь?</h2>';
@@ -357,12 +392,12 @@
       '<button class="btn ghost slim" id="pk-add">+ Добавить своё</button>' +
       '<button class="btn ghost slim" id="pk-cancel" style="margin-top:10px">Отмена</button>';
     openSheet(html);
-    $$('#sheet .pick').forEach(function (b) { b.onclick = function () { pickExercise(b.dataset.name); }; });
-    $('#pk-add').onclick = function () { var v = $('#pk-custom').value.trim(); if (v) pickExercise(v); else toast('Введи название'); };
+    $$('#sheet .pick').forEach(function (b) { b.onclick = function () { pickExercise(b.dataset.name, onPick); }; });
+    $('#pk-add').onclick = function () { var v = $('#pk-custom').value.trim(); if (v) pickExercise(v, onPick); else toast('Введи название'); };
     $('#pk-cancel').onclick = closeSheet;
   }
   function pickBtn(n) { return '<button type="button" class="pick" data-name="' + escapeHtml(n) + '">' + escapeHtml(n) + '</button>'; }
-  function pickExercise(name) {
+  function pickExercise(name, onPick) {
     var eq = S.equipment[name] || guessEquip(name);
     function hint(e) { return e === 'dumbbell' ? 'Вводи вес ОДНОЙ гантели — в журнале покажу «2 × вес», тоннаж посчитаю за обе' : e === 'bodyweight' ? 'Нагрузка = твой вес тела; довесок укажешь в поле веса' : 'Вес штанги как есть'; }
     var html = '<p class="eyebrow">' + escapeHtml(name) + '</p><h2 style="margin-bottom:4px">На чём делаешь?</h2>' +
@@ -380,8 +415,9 @@
       };
     });
     $('#eq-done').onclick = function () {
-      logState.exercise = name; logState.equipment = sel; S.equipment[name] = sel; save();
-      closeSheet(); prefillFor(name); renderLogger();
+      S.equipment[name] = sel; save();
+      if (onPick) { onPick(name, sel); return; }             // вызывающий (напр. планирование) сам решает, что делать
+      logState.exercise = name; logState.equipment = sel; closeSheet(); prefillFor(name); renderLogger();
     };
   }
 
@@ -392,7 +428,7 @@
     var es = { weight: set.weight, reps: set.reps, rpe: set.rpe || null, note: set.note || '' };
     var unit = setEquip(set) === 'dumbbell' ? 'вес гантели, кг' : setEquip(set) === 'bodyweight' ? 'довесок, кг' : 'вес, кг';
     var html = '<p class="eyebrow">' + escapeHtml(set.exercise) + ' · ' + equipLabel(setEquip(set)) + '</p><h2 style="margin-bottom:14px">Правка подхода</h2>' +
-      '<div class="grid2">' + stepper('weight', unit, es.weight, 2.5) + stepper('reps', 'повторы', es.reps, 1) + '</div>' +
+      '<div class="grid2">' + stepper('weight', unit, es.weight, 2.5, 'decimal') + stepper('reps', 'повторы', es.reps, 1, 'numeric') + '</div>' +
       '<div class="field"><label>Как дался подход?</label>' + rpePickerHtml(es.rpe) + '</div>' +
       '<div class="field"><input class="txt" id="ed-note" placeholder="Заметка" value="' + escapeHtml(es.note) + '"></div>' +
       '<button class="btn" id="ed-save">Сохранить</button>' +
@@ -412,7 +448,38 @@
     };
   }
 
-  /* ---------- info sheet: что такое 1ПМ ---------- */
+  /* ---------- templates ---------- */
+  function openSaveTemplate(sets) {
+    var items = [], seen = {};
+    (sets || []).forEach(function (x) { if (!seen[x.exercise]) { seen[x.exercise] = 1; items.push({ exercise: x.exercise, equipment: setEquip(x), weight: x.weight, reps: x.reps }); } });
+    if (!items.length) { toast('Нет подходов для шаблона'); return; }
+    var auto = items.slice(0, 2).map(function (it) { return it.exercise; }).join(' + ') + (items.length > 2 ? ' и ещё' : '');
+    openSheet('<p class="eyebrow">Шаблон</p><h2 style="margin-bottom:10px">Сохранить как шаблон</h2>' +
+      '<div class="field"><label>Название</label><input class="txt" id="tpl-name" value="' + escapeHtml(auto) + '"></div>' +
+      '<p class="muted" style="margin:0 0 12px">Войдут: ' + items.map(function (it) { return escapeHtml(it.exercise); }).join(', ') + '</p>' +
+      '<button class="btn" id="tpl-save">Сохранить</button><button class="btn ghost slim" id="tpl-cancel2" style="margin-top:10px">Отмена</button>');
+    $('#tpl-save').onclick = function () { var nm = $('#tpl-name').value.trim() || auto; S.templates.push({ id: 'tpl-' + Date.now(), name: nm, items: items }); save(); closeSheet(); toast('Шаблон сохранён'); };
+    $('#tpl-cancel2').onclick = closeSheet;
+  }
+  function chooseTemplate(cb) {
+    if (!S.templates.length) { toast('Пока нет шаблонов'); return; }
+    openSheet('<p class="eyebrow">Шаблоны</p><h2 style="margin-bottom:12px">Выбери шаблон</h2>' +
+      S.templates.map(function (t, i) {
+        return '<div class="plan-item"><button type="button" class="tpl-pick" data-i="' + i + '"><b>' + escapeHtml(t.name) + '</b><div class="muted" style="font-size:13px">' + t.items.map(function (it) { return escapeHtml(it.exercise); }).join(', ') + '</div></button><button type="button" class="rm tpl-del" data-i="' + i + '">✕</button></div>';
+      }).join('') +
+      '<button class="btn ghost slim" id="tpl-cancel" style="margin-top:12px">Отмена</button>');
+    $$('#sheet .tpl-pick').forEach(function (b) { b.onclick = function () { cb(S.templates[+b.dataset.i]); }; });
+    $$('#sheet .tpl-del').forEach(function (b) { b.onclick = function () { S.templates.splice(+b.dataset.i, 1); save(); chooseTemplate(cb); }; });
+    $('#tpl-cancel').onclick = closeSheet;
+  }
+  function applyTemplateToDate(t, date) {
+    var plan = { date: date, items: t.items.map(function (it) { return { exercise: it.exercise, equipment: it.equipment, weight: it.weight, reps: it.reps }; }) };
+    S.plans = S.plans.filter(function (p) { return p.date !== date; });
+    S.plans.push(plan); save(); closeSheet(); toast('План по шаблону готов');
+    if (date === activeDate() && $('#screen-logger').classList.contains('active')) renderLogger(); else renderCalendar();
+  }
+
+  /* ---------- info sheet: 1ПМ ---------- */
   function openInfo1rm() {
     openSheet('<p class="eyebrow">Что это</p><h2 style="margin-bottom:10px">Расчётный 1ПМ</h2>' +
       '<p class="muted">Это вес, который ты поднял бы один раз. Приложение считает его по твоим обычным рабочим подходам, поэтому идти на реальный максимум и рисковать не нужно</p>' +
@@ -444,13 +511,13 @@
     };
   }
 
-  /* ---------- History (календарь) ---------- */
+  /* ---------- Calendar (бывш. История) ---------- */
   var MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-  function renderHistory() {
+  function renderCalendar() {
     var box = $('#history-body');
-    if (!renderHistory._month) { var n = new Date(); renderHistory._month = new Date(n.getFullYear(), n.getMonth(), 1); }
-    var m = renderHistory._month, y = m.getFullYear(), mo = m.getMonth();
-    var startIdx = (new Date(y, mo, 1).getDay() + 6) % 7;          // Пн-первый
+    if (!renderCalendar._month) { var n = new Date(); renderCalendar._month = new Date(n.getFullYear(), n.getMonth(), 1); }
+    var m = renderCalendar._month, y = m.getFullYear(), mo = m.getMonth();
+    var startIdx = (new Date(y, mo, 1).getDay() + 6) % 7;
     var daysIn = new Date(y, mo + 1, 0).getDate();
     var counts = {}; S.sessions.forEach(function (s) { counts[s.date] = (counts[s.date] || 0) + 1; });
 
@@ -458,31 +525,77 @@
     for (var i = 0; i < startIdx; i++) cells += '<div class="cal-day empty"></div>';
     for (var d = 1; d <= daysIn; d++) {
       var ds = y + '-' + p2(mo + 1) + '-' + p2(d);
-      var has = counts[ds], sel = renderHistory._sel === ds;
-      cells += '<button type="button" class="cal-day' + (has ? ' has' : '') + (sel ? ' sel' : '') + '" data-date="' + ds + '"' + (has ? '' : ' disabled') + '>' + d + '</button>';
+      var has = counts[ds], planned = !has && planRemaining(ds).length, sel = renderCalendar._sel === ds;
+      cells += '<button type="button" class="cal-day' + (has ? ' has' : '') + (planned ? ' planned' : '') + (sel ? ' sel' : '') + '" data-date="' + ds + '">' + d + '</button>';
     }
     box.innerHTML =
       '<div class="card"><div class="cal-head"><button type="button" id="cal-prev">‹</button>' +
       '<b>' + MONTHS[mo] + ' ' + y + '</b><button type="button" id="cal-next">›</button></div>' +
-      '<div class="cal-dow">' + ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div>' +
-      '<div class="cal-grid">' + cells + '</div>' +
-      '<p class="note-inline">Лаймом отмечены дни с тренировками — тапни, чтобы посмотреть</p></div>' +
+      '<div class="calbox"><div class="cal-dow">' + ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div>' +
+      '<div class="cal-grid">' + cells + '</div></div>' +
+      '<div class="legend" style="margin-top:12px"><span><i style="background:var(--accent);border-radius:3px;width:14px;height:14px"></i>тренировка</span>' +
+      '<span><i style="border:2px solid var(--accent);border-radius:3px;width:14px;height:14px;background:none"></i>план</span></div></div>' +
       '<div id="hist-detail"></div>';
-    $('#cal-prev').onclick = function () { renderHistory._month = new Date(y, mo - 1, 1); renderHistory(); };
-    $('#cal-next').onclick = function () { renderHistory._month = new Date(y, mo + 1, 1); renderHistory(); };
-    $$('#history-body .cal-day.has').forEach(function (b) { b.onclick = function () { renderHistory._sel = b.dataset.date; renderHistory(); }; });
-    if (renderHistory._sel && counts[renderHistory._sel]) renderDayDetail(renderHistory._sel);
-    else $('#hist-detail').innerHTML = '<p class="empty">Выбери день с тренировкой</p>';
+    $('#cal-prev').onclick = function () { renderCalendar._month = new Date(y, mo - 1, 1); renderCalendar(); };
+    $('#cal-next').onclick = function () { renderCalendar._month = new Date(y, mo + 1, 1); renderCalendar(); };
+    $$('#history-body .cal-day[data-date]').forEach(function (b) { b.onclick = function () { onCalDay(b.dataset.date); }; });
+    if (renderCalendar._sel && counts[renderCalendar._sel]) renderDayDetail(renderCalendar._sel);
+    else $('#hist-detail').innerHTML = '<p class="empty">Тапни день: с тренировкой — посмотреть, будущий — запланировать, прошлый пустой — записать задним числом</p>';
+  }
+  function onCalDay(ds) {
+    var t = todayStr();
+    if (sessionOf(ds)) { renderCalendar._sel = ds; renderCalendar(); return; }   // есть тренировка → детали
+    if (ds > t) { openPlanDay(ds); return; }                                     // будущее → планирование
+    openDayEmpty(ds);                                                            // прошлое/сегодня пусто → запись задним числом
+  }
+  function startBackdated(ds) { logDate = (ds === todayStr() ? null : ds); renderCalendar._sel = null; go('logger'); }
+  function openDayEmpty(ds) {
+    openSheet('<p class="eyebrow">' + prettyDate(ds) + '</p><h2 style="margin-bottom:6px">Нет тренировки в этот день</h2>' +
+      '<p class="muted" style="margin:0 0 16px">Можно записать её задним числом</p>' +
+      '<button class="btn" id="de-log">Записать тренировку</button>' +
+      (S.templates.length ? '<button class="btn ghost slim" id="de-tpl" style="margin-top:10px">Начать по шаблону</button>' : '') +
+      '<button class="btn ghost slim" id="de-cancel" style="margin-top:10px">Отмена</button>');
+    $('#de-log').onclick = function () { closeSheet(); startBackdated(ds); };
+    if ($('#de-tpl')) $('#de-tpl').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, ds); startBackdated(ds); }); };
+    $('#de-cancel').onclick = closeSheet;
+  }
+  function openPlanDay(ds) {
+    var plan = planFor(ds); var editing = plan ? { date: ds, items: plan.items.slice() } : { date: ds, items: [] };
+    function draw() {
+      var itemsHtml = editing.items.length ? editing.items.map(function (it, i) {
+        return '<div class="plan-item"><span>' + escapeHtml(it.exercise) + ' <span class="muted">· ' + equipLabel(it.equipment) + '</span></span><button type="button" class="rm" data-i="' + i + '">✕</button></div>';
+      }).join('') : '<p class="muted">Пока пусто — добавь упражнения</p>';
+      openSheet('<p class="eyebrow">План на ' + prettyDate(ds) + '</p><h2 style="margin-bottom:12px">Запланировать тренировку</h2>' +
+        '<div id="pl-items">' + itemsHtml + '</div>' +
+        '<button class="btn ghost slim" id="pl-add" style="margin-top:10px">+ Добавить упражнение</button>' +
+        (S.templates.length ? '<button class="btn ghost slim" id="pl-tpl" style="margin-top:10px">Взять из шаблона</button>' : '') +
+        '<button class="btn" id="pl-save" style="margin-top:14px">Сохранить план</button>' +
+        (plan ? '<button class="btn ghost slim" id="pl-del" style="margin-top:10px;color:var(--bad)">Удалить план</button>' : '') +
+        '<p class="note-inline">План — это намерение. В тоннаж, прогноз и диагностику он не идёт, только напомнит в этот день</p>');
+      $$('#pl-items .rm').forEach(function (b) { b.onclick = function () { editing.items.splice(+b.dataset.i, 1); draw(); }; });
+      $('#pl-add').onclick = function () { openExercisePicker(function (name, eq) { editing.items.push({ exercise: name, equipment: eq }); draw(); }); };
+      if ($('#pl-tpl')) $('#pl-tpl').onclick = function () { chooseTemplate(function (t) { t.items.forEach(function (it) { editing.items.push({ exercise: it.exercise, equipment: it.equipment, weight: it.weight, reps: it.reps }); }); draw(); }); };
+      $('#pl-save').onclick = function () {
+        if (!editing.items.length) { toast('Добавь хотя бы одно упражнение'); return; }
+        S.plans = S.plans.filter(function (p) { return p.date !== ds; }); S.plans.push(editing); save(); closeSheet(); toast('Запланировано'); renderCalendar();
+      };
+      if ($('#pl-del')) $('#pl-del').onclick = function () { S.plans = S.plans.filter(function (p) { return p.date !== ds; }); save(); closeSheet(); toast('План удалён'); renderCalendar(); };
+    }
+    draw();
   }
   function renderDayDetail(ds) {
-    var sess = S.sessions.filter(function (s) { return s.date === ds; })[0];
+    var sess = sessionOf(ds);
     var wrap = $('#hist-detail'); if (!sess) { wrap.innerHTML = ''; return; }
-    var html = '<div class="card"><p class="eyebrow">' + prettyDate(ds) + '</p>' +
+    wrap.innerHTML = '<div class="card"><p class="eyebrow">' + prettyDate(ds) + '</p>' +
       '<div class="statrow" style="margin-bottom:6px">' + stat('Подходов', sess.sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
       '<p class="note-inline" style="margin-bottom:6px">Тап по подходу — изменить</p>' +
-      sess.sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('') + '</div>';
-    wrap.innerHTML = html;
-    $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderHistory(); }); }; });
+      sess.sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('') +
+      '<div class="hr"></div>' +
+      '<button class="btn ghost slim" id="dd-add">+ Добавить подход задним числом</button>' +
+      '<button class="btn ghost slim" id="dd-tpl" style="margin-top:10px">Сохранить как шаблон</button></div>';
+    $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderCalendar(); }); }; });
+    $('#dd-add').onclick = function () { startBackdated(ds); };
+    $('#dd-tpl').onclick = function () { openSaveTemplate(sess.sets); };
   }
 
   /* ---------- Forecast ---------- */
@@ -580,11 +693,11 @@
   }
   function uniqueExercises() {
     var seen = {}, out = [];
-    S.sessions.forEach(function (s) { s.sets.forEach(function (x) { if (x.reps > 0 && !seen[x.exercise]) { seen[x.exercise] = 1; out.push(x.exercise); } }); });
+    S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).forEach(function (s) { s.sets.forEach(function (x) { if (x.reps > 0 && !seen[x.exercise]) { seen[x.exercise] = 1; out.push(x.exercise); } }); });
     return out;
   }
   function seriesFor(name) {
-    return S.sessions.map(function (s) {
+    return S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).map(function (s) {
       var best = bestE1rmOf(s.sets.filter(function (x) { return x.exercise === name; }));
       return best == null ? null : { date: s.date, e1rm: best };
     }).filter(Boolean);
@@ -599,7 +712,7 @@
     var perWeek = E.round(delta / weeksSpan, 2);
 
     var recentSets = [];
-    S.sessions.slice(-3).forEach(function (s) { s.sets.forEach(function (x) { if (x.exercise === name) recentSets.push(x); }); });
+    S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).slice(-3).forEach(function (s) { s.sets.forEach(function (x) { if (x.exercise === name) recentSets.push(x); }); });
     var reds = recentSets.filter(function (x) { return x.rpe === 'r'; }).length;
     var recentChecks = S.checkins.slice(-7);
     var avgSleep = avg(recentChecks.map(function (c) { return c.sleep; }));
@@ -683,7 +796,7 @@
     if (!S.profile) { $('#screen-onboarding').classList.add('active'); $('.tabbar').style.display = 'none'; startOnboarding(); }
     else { $('.tabbar').style.display = 'flex'; }
   }
-  $$('.tab[data-go]').forEach(function (t) { t.onclick = function () { go(t.dataset.go); }; });
+  $$('.tab[data-go]').forEach(function (t) { t.onclick = function () { if (t.dataset.go === 'logger') logDate = null; go(t.dataset.go); }; });
   $('#sheet-bg').onclick = function (e) { if (e.target === $('#sheet-bg')) closeSheet(); };
   boot();
   if (S.profile) go('today');

@@ -1,5 +1,5 @@
 /* Минимальный офлайн-кэш. Прототип: cache-first по ядру, версия в имени кэша. */
-var CACHE = 'fittracker-v2';
+var CACHE = 'fittracker-v3';
 var CORE = ['./', './index.html', './app.css', './app.js', './engine.js', './manifest.webmanifest'];
 
 self.addEventListener('install', function (e) {
