@@ -1,22 +1,13 @@
-/* Минимальный офлайн-кэш. Прототип: cache-first по ядру, версия в имени кэша. */
-var CACHE = 'fittracker-v3';
-var CORE = ['./', './index.html', './app.css', './app.js', './engine.js', './manifest.webmanifest'];
-
-self.addEventListener('install', function (e) {
-  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(CORE); }).then(function () { return self.skipWaiting(); }));
-});
+/* KILL-SWITCH: на время активной разработки офлайн-кэш отключён.
+   Этот воркер сносит все прежние кэши, отписывается и заставляет страницы перезагрузиться со свежими файлами. */
+self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) {
-  e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.map(function (k) { if (k !== CACHE) return caches.delete(k); }));
-  }).then(function () { return self.clients.claim(); }));
+  e.waitUntil((async function () {
+    var keys = await caches.keys();
+    await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+    await self.registration.unregister();
+    var clients = await self.clients.matchAll({ type: 'window' });
+    clients.forEach(function (c) { try { c.navigate(c.url); } catch (err) { } });
+  })());
 });
-self.addEventListener('fetch', function (e) {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then(function (hit) {
-      return hit || fetch(e.request).then(function (res) {
-        return res;
-      }).catch(function () { return caches.match('./index.html'); });
-    })
-  );
-});
+/* нет обработчика fetch → запросы идут напрямую в сеть, кэш не подменяет файлы */

@@ -150,19 +150,22 @@
         numField('ankle', 'Лодыжка, см', draft.ankle || 22) +
         '</div>' +
         '<button class="btn" id="ob-done">Готово, показать прогноз</button>' +
+        '<button class="btn ghost slim" id="ob-later" style="margin-top:10px">Указать позже</button>' +
         '<button class="btn ghost slim" id="ob-back" style="margin-top:10px">← Назад</button>';
       $('#ob-back').onclick = function () { collectNums(wrap, draft); obStep(1); };
-      $('#ob-done').onclick = function () {
-        collectNums(wrap, draft);
-        S.profile = {
-          scenario: draft.scenario, sex: draft.sex, experience: draft.experience, activity: draft.activity,
-          height: +draft.height, weight: +draft.weight, age: +draft.age, wrist: +draft.wrist, ankle: +draft.ankle,
-          createdAt: todayStr()
-        };
-        S.weighins = [{ date: todayStr(), weight: +draft.weight }];
-        save(); boot(); go('forecast');
-      };
+      $('#ob-done').onclick = function () { collectNums(wrap, draft); finishOnboarding(true); };
+      $('#ob-later').onclick = function () { finishOnboarding(false); };
     }
+  }
+  function finishOnboarding(withFrame) {
+    S.profile = {
+      scenario: draft.scenario, sex: draft.sex, experience: draft.experience, activity: draft.activity,
+      height: +draft.height, weight: +draft.weight, age: +draft.age,
+      wrist: withFrame ? +draft.wrist : null, ankle: withFrame ? +draft.ankle : null,
+      createdAt: todayStr()
+    };
+    S.weighins = [{ date: todayStr(), weight: +draft.weight }];
+    save(); boot(); go('forecast');
   }
   function chips(name, opts, cur) {
     return '<div class="chips" data-name="' + name + '">' + opts.map(function (o) {
@@ -359,17 +362,24 @@
     rec.ts = logDate ? (new Date(date).getTime() + sess.sets.length) : Date.now();
     if (logState.equipment === 'bodyweight') rec.bodyAt = currentBodyweight();
     sess.sets.push(rec); save();
+    logSetOpen[rec.exercise] = true;                          // раскрыть упражнение, чтобы новый подход был виден
     logState.note = ''; logState.rpe = null;
     if (navigator.vibrate) navigator.vibrate(15);
     renderLogger();
   }
+  var logSetOpen = {};
   function renderSetList() {
     var box = $('#lg-sets'); if (!box) return;
     var date = activeDate();
     var sess = sessionOf(date);
     var sets = sess ? sess.sets : [];
     if (!sets.length) { box.innerHTML = '<p class="muted" style="text-align:center">Пока нет подходов' + (logDate ? ' за этот день' : ' сегодня') + '</p>'; return; }
-    box.innerHTML = '<p class="eyebrow">' + (logDate && logDate !== todayStr() ? prettyDate(date) : 'Сегодня') + ' · тап чтобы изменить</p>' + sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('');
+    if (logSetOpen[logState.exercise] == null) logSetOpen[logState.exercise] = true;   // текущее упражнение раскрыто
+    box.innerHTML = '<p class="eyebrow">' + (logDate && logDate !== todayStr() ? prettyDate(date) : 'Записано сегодня') + '</p>' +
+      '<div class="statrow" style="margin:0 0 10px">' + stat('Упражнений', groupSets(sess).length) + stat('Подходов', sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
+      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению — раскрыть подходы, тап по подходу — изменить</p>' +
+      groupedHtml(sess, logSetOpen);
+    $$('#lg-sets .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; logSetOpen[k] = !logSetOpen[k]; renderSetList(); }; });
     $$('#lg-sets .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, renderLogger); }; });
   }
   function setRowHtml(x, sid, idx) {
@@ -379,6 +389,29 @@
       '<div><div class="load mono">' + escapeHtml(x.exercise) + ' · ' + weightPart(x) + ' × ' + x.reps + '</div>' +
       (x.note ? '<div class="muted" style="font-size:13px">' + escapeHtml(x.note) + '</div>' : '') +
       '</div><div class="meta">' + meta + '</div></button>';
+  }
+  // группировка подходов по упражнению (порядок первого появления, чередование склеивается)
+  function groupSets(sess) {
+    var groups = [], gidx = {};
+    sess.sets.forEach(function (x, i) {
+      var k = x.exercise;
+      if (gidx[k] == null) { gidx[k] = groups.length; groups.push({ exercise: k, equipment: setEquip(x), items: [] }); }
+      groups[gidx[k]].items.push({ set: x, i: i });
+    });
+    return groups;
+  }
+  function groupedHtml(sess, openMap) {
+    return groupSets(sess).map(function (g) {
+      var isOpen = !!openMap[g.exercise];
+      var best = bestE1rmOf(g.items.map(function (o) { return o.set; }));
+      var sub = g.items.length + ' подх.' + (g.equipment !== 'barbell' ? ' · ' + equipLabel(g.equipment) : '') + (best != null ? ' · 1ПМ ' + best + ' кг' : '');
+      return '<div class="exgroup">' +
+        '<button type="button" class="exhead" data-ex="' + escapeHtml(g.exercise) + '">' +
+        '<div class="exhead-txt"><div class="exname">' + escapeHtml(g.exercise) + '</div><div class="exsub muted">' + sub + '</div></div>' +
+        '<span class="exchevron">' + (isOpen ? '▾' : '▸') + '</span></button>' +
+        (isOpen ? ('<div class="exsets">' + g.items.map(function (o) { return setRowHtml(o.set, sess.id, o.i); }).join('') + '</div>') : '') +
+        '</div>';
+    }).join('');
   }
 
   /* ---------- exercise picker + equipment ---------- */
@@ -405,7 +438,9 @@
       '<div class="chips" id="eq-pick">' +
       ['barbell', 'dumbbell', 'bodyweight'].map(function (v) { return '<button class="chip" data-val="' + v + '" aria-pressed="' + (eq === v) + '">' + { barbell: 'Штанга', dumbbell: 'Гантели', bodyweight: 'Свой вес' }[v] + '</button>'; }).join('') +
       '</div><p class="note-inline" id="eq-hint">' + hint(eq) + '</p>' +
-      '<button class="btn" id="eq-done">Готово</button>';
+      '<button class="btn" id="eq-done">Готово</button>' +
+      '<button class="btn ghost slim" id="eq-back" style="margin-top:10px">← Назад к списку</button>' +
+      '<button class="btn ghost slim" id="eq-cancel" style="margin-top:10px">Отмена</button>';
     openSheet(html);
     var sel = eq;
     $$('#eq-pick .chip').forEach(function (c) {
@@ -414,6 +449,8 @@
         c.setAttribute('aria-pressed', 'true'); sel = c.dataset.val; $('#eq-hint').textContent = hint(sel);
       };
     });
+    $('#eq-back').onclick = function () { openExercisePicker(onPick); };
+    $('#eq-cancel').onclick = closeSheet;
     $('#eq-done').onclick = function () {
       S.equipment[name] = sel; save();
       if (onPick) { onPick(name, sel); return; }             // вызывающий (напр. планирование) сам решает, что делать
@@ -586,14 +623,19 @@
   function renderDayDetail(ds) {
     var sess = sessionOf(ds);
     var wrap = $('#hist-detail'); if (!sess) { wrap.innerHTML = ''; return; }
+    if (renderDayDetail._openDate !== ds) { renderDayDetail._openDate = ds; renderDayDetail._open = {}; }
+    var openMap = renderDayDetail._open;
+
     wrap.innerHTML = '<div class="card"><p class="eyebrow">' + prettyDate(ds) + '</p>' +
-      '<div class="statrow" style="margin-bottom:6px">' + stat('Подходов', sess.sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
-      '<p class="note-inline" style="margin-bottom:6px">Тап по подходу — изменить</p>' +
-      sess.sets.map(function (x, i) { return setRowHtml(x, sess.id, i); }).join('') +
+      '<div class="statrow" style="margin-bottom:12px">' + stat('Упражнений', groupSets(sess).length) + stat('Подходов', sess.sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
+      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению — раскрыть подходы</p>' +
+      groupedHtml(sess, openMap) +
       '<div class="hr"></div>' +
-      '<button class="btn ghost slim" id="dd-add">+ Добавить подход задним числом</button>' +
+      '<button class="btn ghost slim" id="dd-add">+ Добавить упражнение или подход</button>' +
       '<button class="btn ghost slim" id="dd-tpl" style="margin-top:10px">Сохранить как шаблон</button></div>';
-    $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderCalendar(); }); }; });
+
+    $$('#hist-detail .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; openMap[k] = !openMap[k]; renderDayDetail(ds); }; });
+    $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderDayDetail(ds); }); }; });
     $('#dd-add').onclick = function () { startBackdated(ds); };
     $('#dd-tpl').onclick = function () { openSaveTemplate(sess.sets); };
   }
@@ -619,7 +661,7 @@
       '<span><i style="background:var(--accent)"></i>прогноз (коридор)</span>' +
       '<span><i style="background:var(--ink-2)"></i>факт (твой вес)</span>' +
       '<span><i style="background:var(--bad)"></i>если бросишь</span></div>' +
-      '<p class="note-inline">Линия «если бросишь» — оценка потери мышц без тренировок. Каркас (запястье/лодыжка) задаёт ширину коридора: у тебя ×' + g.frameFactor + '</p>';
+      '<p class="note-inline">Линия «если бросишь» — оценка потери мышц без тренировок.' + (p.wrist ? (' Каркас (запястье/лодыжка) задаёт ширину коридора: у тебя ×' + g.frameFactor) : ' Каркас пока не указан — коридор по среднему') + '</p>';
     box.appendChild(chart);
 
     var calCard = el('div', 'card');
@@ -628,7 +670,30 @@
       '<p class="note-inline">Оценка по Mifflin-St Jeor. Взвешивайся раз в 2 недели — приложение подстроит коридор под факт</p>';
     box.appendChild(calCard);
 
+    if (!p.wrist) {
+      var fr = el('div', 'card');
+      fr.innerHTML = '<p class="eyebrow">Каркас не указан</p><p class="muted" style="margin:0 0 12px">Коридор прогноза сейчас по среднему. Замерь запястье и лодыжку — и он подстроится под твой скелет</p>';
+      var frb = el('button', 'btn ghost slim', 'Указать каркас');
+      frb.onclick = openFrameSheet;
+      fr.appendChild(frb);
+      box.appendChild(fr);
+    }
+
     drawForecast($('#fc-canvas'), p, weeks);
+  }
+  function openFrameSheet() {
+    var p = S.profile;
+    openSheet('<p class="eyebrow">Каркас</p><h2 style="margin-bottom:6px">Запястье и лодыжка</h2>' +
+      '<p class="muted" style="margin:0 0 6px">Кость почти без мышц и жира — она задаёт ширину прогноза</p>' +
+      '<p class="note-inline">Мерь сантиметром в самом узком месте</p>' +
+      '<div class="grid2" style="margin-top:14px">' + numField('f_wrist', 'Запястье, см', p.wrist || 17) + numField('f_ankle', 'Лодыжка, см', p.ankle || 22) + '</div>' +
+      '<button class="btn" id="fr-save">Сохранить</button>' +
+      '<button class="btn ghost slim" id="fr-cancel" style="margin-top:10px">Отмена</button>');
+    $('#fr-save').onclick = function () {
+      p.wrist = +$('[data-num="f_wrist"]').value; p.ankle = +$('[data-num="f_ankle"]').value;
+      save(); closeSheet(); toast('Каркас учтён'); renderForecast();
+    };
+    $('#fr-cancel').onclick = closeSheet;
   }
   function drawForecast(cv, p, weeks) {
     var ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
@@ -681,7 +746,7 @@
     var box = $('#diagnosis-body');
     var exs = uniqueExercises();
     if (!exs.length) {
-      box.innerHTML = '<div class="empty"><p>Пока нечего диагностировать.<br>Залогируй пару тренировок или загрузи пример на вкладке «Сегодня».</p></div>';
+      box.innerHTML = '<div class="empty"><p>Пока нечего анализировать.<br>Залогируй пару тренировок или загрузи пример на вкладке «Сегодня».</p></div>';
       return;
     }
     var chosen = renderDiagnosis._ex && exs.indexOf(renderDiagnosis._ex) >= 0 ? renderDiagnosis._ex : exs[0];
