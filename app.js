@@ -196,37 +196,52 @@
   /* ---------- Today ---------- */
   function renderToday() {
     var box = $('#today-body');
-    var lastCheck = S.checkins[S.checkins.length - 1];
+    var todayCheck = checkinOf(todayStr());                   // только СЕГОДНЯШНИЙ чек-ин, не «последний любой»
     var todaySess = sessionOf(todayStr());
     var setsToday = todaySess ? todaySess.sets.length : 0;
     box.innerHTML = '';
 
-    var ready = el('div', 'card');
-    var readyHtml = '<p class="eyebrow">Готовность</p>';
-    if (lastCheck) {
-      readyHtml += '<div class="statrow">' +
-        stat('Сон', lastCheck.sleep + ' ч') + stat('Стресс', lastCheck.stress + '/10') +
-        stat('Калории', (lastCheck.calories || '—') + '') + '</div>' +
-        '<p class="note-inline">Последний чек-ин: ' + prettyDate(lastCheck.date) + '</p>';
-    } else {
-      readyHtml += '<p class="muted" style="margin:0">Ещё нет данных. Вечером отметь сон, калории и стресс — это топливо для диагностики</p>';
+    if (hasDemo()) {
+      var dbadge = el('div', 'card');
+      dbadge.innerHTML = '<span class="pill warn">демо</span> <span class="muted">Показаны примерные данные для демонстрации</span>';
+      var rb = el('button', 'btn ghost slim', 'Сбросить демо-данные');
+      rb.style.marginTop = '12px';
+      rb.onclick = function () { resetDemo(); toast('Демо-данные удалены'); go('today'); };
+      dbadge.appendChild(rb);
+      box.appendChild(dbadge);
     }
-    ready.innerHTML = readyHtml;
-    box.appendChild(ready);
 
+    // Главное действие дня — тренировка (первой)
     var act = el('div', 'card');
     var plannedToday = planRemaining(todayStr());
-    act.innerHTML = '<p class="eyebrow">Сегодня</p>' +
+    act.innerHTML = '<p class="eyebrow">Тренировка</p>' +
       '<h2 style="font-size:22px;margin-bottom:4px">' + (setsToday ? 'Тренировка идёт' : 'Готов тренироваться?') + '</h2>' +
       '<p class="muted" style="margin:0 0 16px">' + (setsToday ? ('Записано подходов: ' + setsToday) : (plannedToday.length ? ('Запланировано: ' + plannedToday.map(function (it) { return it.exercise; }).join(', ')) : 'Логируй каждый подход в пару тапов')) + '</p>';
     var startBtn = el('button', 'btn', (setsToday ? 'Продолжить тренировку' : 'Начать тренировку'));
     startBtn.onclick = function () { logDate = null; go('logger'); };
     act.appendChild(startBtn);
-    var ciBtn = el('button', 'btn ghost slim', 'Вечерний чек-ин: сон · калории · стресс');
-    ciBtn.style.marginTop = '10px';
-    ciBtn.onclick = openCheckin;
-    act.appendChild(ciBtn);
     box.appendChild(act);
+
+    // Готовность / чек-ин: пусто → заметная лаймовая карточка, заполнено → тихая строка значений с правкой
+    if (todayCheck) {
+      var ready = el('div', 'card tap');
+      ready.innerHTML = '<p class="eyebrow">Готовность сегодня</p><div class="statrow">' +
+        stat('Сон', todayCheck.sleep != null ? todayCheck.sleep + ' ч' : 'не запис.') +
+        stat('Стресс', todayCheck.stress != null ? todayCheck.stress + '/10' : 'не запис.') +
+        stat('Калории', todayCheck.calories != null ? todayCheck.calories + '' : 'не запис.') + '</div>' +
+        '<p class="note-inline">Тап — изменить чек-ин</p>';
+      ready.onclick = function () { openCheckin(todayStr()); };
+      box.appendChild(ready);
+    } else {
+      var prompt = el('div', 'card checkin-prompt');
+      prompt.innerHTML = '<p class="eyebrow" style="color:var(--accent)">Вечерний чек-ин</p>' +
+        '<h2 style="font-size:20px;margin-bottom:4px">30 секунд перед сном</h2>' +
+        '<p class="muted" style="margin:0 0 14px">Сон, калории, стресс — топливо для диагностики. Пока не заполнил, приложение их не выдумывает</p>';
+      var pb = el('button', 'btn', 'Заполнить чек-ин');
+      pb.onclick = function () { openCheckin(todayStr()); };
+      prompt.appendChild(pb);
+      box.appendChild(prompt);
+    }
 
     var recent = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; }).slice(0, 4);
     if (recent.length) {
@@ -525,27 +540,44 @@
     $('#info-ok').onclick = closeSheet;
   }
 
-  /* ---------- check-in sheet ---------- */
-  function openCheckin() {
-    var existing = S.checkins.filter(function (c) { return c.date === todayStr(); })[0] || { sleep: 7.5, calories: '', stress: 5 };
+  /* ---------- check-in sheet (за любой день, без фейковых дефолтов) ---------- */
+  function checkinOf(date) { return S.checkins.filter(function (c) { return c.date === date; })[0]; }
+  function refreshAfterCheckin(date) {
+    if (date === todayStr() && $('#screen-today').classList.contains('active')) renderToday();
+    else if ($('#screen-history').classList.contains('active')) renderCalendar();
+  }
+  function openCheckin(date) {
+    date = date || todayStr();
+    var existing = checkinOf(date);
+    var touched = { sleep: false, stress: false };
+    var val = { sleep: existing && existing.sleep != null ? existing.sleep : null, stress: existing && existing.stress != null ? existing.stress : null };
+    touched.sleep = val.sleep != null; touched.stress = val.stress != null;   // при правке показываем сохранённое
+    var sleepPos = val.sleep != null ? val.sleep : 7.5, stressPos = val.stress != null ? val.stress : 5;
+    var calVal = existing && existing.calories != null ? existing.calories : '';
     openSheet(
-      '<p class="eyebrow">Вечерний чек-ин · ' + prettyDate(todayStr()) + '</p>' +
+      '<p class="eyebrow">Чек-ин · ' + prettyDate(date) + '</p>' +
       '<h2>Как прошёл день?</h2>' +
       '<div class="field" style="margin-top:16px"><label>Сон прошлой ночью, часов</label>' +
-      '<div class="slider"><input type="range" id="ci-sleep" min="3" max="11" step="0.5" value="' + existing.sleep + '"><span class="sv mono" id="ci-sleep-v">' + existing.sleep + '</span></div></div>' +
-      '<div class="field"><label>Уровень стресса сегодня</label>' +
-      '<div class="slider"><input type="range" id="ci-stress" min="1" max="10" step="1" value="' + existing.stress + '"><span class="sv mono" id="ci-stress-v">' + existing.stress + '</span></div></div>' +
+      '<div class="slider"><input type="range" id="ci-sleep" min="3" max="11" step="0.5" value="' + sleepPos + '"><span class="sv mono" id="ci-sleep-v">' + (touched.sleep ? val.sleep : '—') + '</span></div>' +
+      '<p class="note-inline" id="ci-sleep-h">' + (touched.sleep ? '' : 'не указано — тронь ползунок, если хочешь записать') + '</p></div>' +
+      '<div class="field"><label>Уровень стресса</label>' +
+      '<div class="slider"><input type="range" id="ci-stress" min="1" max="10" step="1" value="' + stressPos + '"><span class="sv mono" id="ci-stress-v">' + (touched.stress ? val.stress : '—') + '</span></div>' +
+      '<p class="note-inline" id="ci-stress-h">' + (touched.stress ? '' : 'не указано — тронь ползунок, если хочешь записать') + '</p></div>' +
       '<div class="field"><label>Калории за день <span class="opt">если считаешь</span></label>' +
-      '<input class="txt mono" type="number" inputmode="numeric" id="ci-cal" placeholder="напр. 2800" value="' + (existing.calories || '') + '"></div>' +
+      '<input class="txt mono" type="number" inputmode="numeric" id="ci-cal" placeholder="не указано" value="' + calVal + '"></div>' +
       '<button class="btn" id="ci-save">Сохранить</button>' +
+      (existing ? '<button class="btn ghost slim" id="ci-del" style="margin-top:10px;color:var(--bad)">Удалить чек-ин</button>' : '') +
       '<button class="btn ghost slim" id="ci-cancel" style="margin-top:10px">Отмена</button>');
-    $('#ci-sleep').oninput = function () { $('#ci-sleep-v').textContent = this.value; };
-    $('#ci-stress').oninput = function () { $('#ci-stress-v').textContent = this.value; };
+    $('#ci-sleep').oninput = function () { touched.sleep = true; val.sleep = +this.value; $('#ci-sleep-v').textContent = val.sleep; $('#ci-sleep-h').textContent = ''; };
+    $('#ci-stress').oninput = function () { touched.stress = true; val.stress = +this.value; $('#ci-stress-v').textContent = val.stress; $('#ci-stress-h').textContent = ''; };
     $('#ci-cancel').onclick = closeSheet;
+    if ($('#ci-del')) $('#ci-del').onclick = function () { S.checkins = S.checkins.filter(function (c) { return c.date !== date; }); save(); closeSheet(); toast('Чек-ин удалён'); refreshAfterCheckin(date); };
     $('#ci-save').onclick = function () {
-      var rec = { date: todayStr(), sleep: +$('#ci-sleep').value, stress: +$('#ci-stress').value, calories: $('#ci-cal').value ? +$('#ci-cal').value : null };
-      S.checkins = S.checkins.filter(function (c) { return c.date !== todayStr(); });
-      S.checkins.push(rec); save(); closeSheet(); toast('Чек-ин записан'); go('today');
+      var cal = $('#ci-cal').value !== '' ? +$('#ci-cal').value : null;
+      var rec = { date: date, sleep: touched.sleep ? val.sleep : null, stress: touched.stress ? val.stress : null, calories: cal };
+      S.checkins = S.checkins.filter(function (c) { return c.date !== date; });
+      if (rec.sleep == null && rec.stress == null && rec.calories == null) { save(); closeSheet(); toast('Пусто — чек-ин не сохранён'); refreshAfterCheckin(date); return; }
+      S.checkins.push(rec); save(); closeSheet(); toast('Чек-ин записан'); refreshAfterCheckin(date);
     };
   }
 
@@ -592,9 +624,11 @@
       '<p class="muted" style="margin:0 0 16px">Можно записать её задним числом</p>' +
       '<button class="btn" id="de-log">Записать тренировку</button>' +
       (S.templates.length ? '<button class="btn ghost slim" id="de-tpl" style="margin-top:10px">Начать по шаблону</button>' : '') +
+      '<button class="btn ghost slim" id="de-checkin" style="margin-top:10px">' + (checkinOf(ds) ? 'Изменить чек-ин за день' : '+ Чек-ин за день (сон · стресс · калории)') + '</button>' +
       '<button class="btn ghost slim" id="de-cancel" style="margin-top:10px">Отмена</button>');
     $('#de-log').onclick = function () { closeSheet(); startBackdated(ds); };
     if ($('#de-tpl')) $('#de-tpl').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, ds); startBackdated(ds); }); };
+    $('#de-checkin').onclick = function () { openCheckin(ds); };
     $('#de-cancel').onclick = closeSheet;
   }
   function openPlanDay(ds) {
@@ -627,16 +661,22 @@
     if (renderDayDetail._openDate !== ds) { renderDayDetail._openDate = ds; renderDayDetail._open = {}; }
     var openMap = renderDayDetail._open;
 
+    var chk = checkinOf(ds);
+    var chkRow = chk
+      ? '<button type="button" class="checkin-row filled" id="dd-checkin"><span>Сон ' + (chk.sleep != null ? chk.sleep + ' ч' : '—') + ' · Стресс ' + (chk.stress != null ? chk.stress + '/10' : '—') + ' · ' + (chk.calories != null ? chk.calories + ' ккал' : '—') + '</span><span class="muted">изменить</span></button>'
+      : '<button type="button" class="checkin-row" id="dd-checkin"><span class="muted">+ сон · стресс · калории за этот день</span></button>';
     wrap.innerHTML = '<div class="card"><p class="eyebrow">' + prettyDate(ds) + '</p>' +
       '<div class="statrow" style="margin-bottom:12px">' + stat('Упражнений', groupSets(sess).length) + stat('Подходов', sess.sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
       '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению — раскрыть подходы</p>' +
       groupedHtml(sess, openMap) +
+      chkRow +
       '<div class="hr"></div>' +
       '<button class="btn ghost slim" id="dd-add">+ Добавить упражнение или подход</button>' +
       '<button class="btn ghost slim" id="dd-tpl" style="margin-top:10px">Сохранить как шаблон</button></div>';
 
     $$('#hist-detail .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; openMap[k] = !openMap[k]; renderDayDetail(ds); }; });
     $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderDayDetail(ds); }); }; });
+    $('#dd-checkin').onclick = function () { openCheckin(ds); };
     $('#dd-add').onclick = function () { startBackdated(ds); };
     $('#dd-tpl').onclick = function () { openSaveTemplate(sess.sets); };
   }
@@ -780,7 +820,7 @@
     var recentSets = [];
     S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).slice(-3).forEach(function (s) { s.sets.forEach(function (x) { if (x.exercise === name) recentSets.push(x); }); });
     var reds = recentSets.filter(function (x) { return x.rpe === 'r'; }).length;
-    var recentChecks = S.checkins.slice(-7);
+    var recentChecks = S.checkins.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).slice(-7);
     var avgSleep = avg(recentChecks.map(function (c) { return c.sleep; }));
     var avgStress = avg(recentChecks.map(function (c) { return c.stress; }));
 
@@ -824,11 +864,21 @@
   function avg(arr) { arr = arr.filter(function (x) { return typeof x === 'number'; }); return arr.length ? arr.reduce(function (a, b) { return a + b; }, 0) / arr.length : null; }
 
   /* ---------- demo seed ---------- */
+  function hasDemo() {
+    return S.sessions.some(function (s) { return s.demo; }) || S.checkins.some(function (c) { return c.demo; }) || S.weighins.some(function (w) { return w.demo; });
+  }
+  function resetDemo() {                                      // удаляет ТОЛЬКО демо-записи, данные пользователя целы
+    S.sessions = S.sessions.filter(function (s) { return !s.demo; });
+    S.checkins = S.checkins.filter(function (c) { return !c.demo; });
+    S.weighins = S.weighins.filter(function (w) { return !w.demo; });
+    save();
+  }
   function seedDemo() {
     var p = S.profile;
     var base = new Date(); base.setDate(base.getDate() - 42);
     function d(offset) { var x = new Date(base); x.setDate(x.getDate() + offset); return x.toISOString().slice(0, 10); }
-    S.sessions = []; S.checkins = []; S.weighins = [{ date: d(0), weight: p.weight }];
+    resetDemo();                                              // не плодить дубли, если демо уже было
+    S.weighins.push({ date: d(0), weight: p.weight, demo: true });
     var benchStart = 60, squatStart = 90;
     for (var w = 0; w < 6; w++) {
       var day = d(w * 7);
@@ -836,14 +886,14 @@
       var squat = squatStart + w * 5;
       var rpe = w < 3 ? 'y' : (w < 5 ? 'y' : 'r');
       S.sessions.push({
-        id: 'demo-' + w, date: day, sets: [
+        id: 'demo-' + w, date: day, demo: true, sets: [
           { exercise: 'Жим лёжа', equipment: 'barbell', weight: bench, reps: 5, rpe: rpe, note: w >= 4 ? 'тяжело, подстраховали' : '', ts: w },
           { exercise: 'Жим лёжа', equipment: 'barbell', weight: bench, reps: w < 3 ? 5 : 4, rpe: w < 3 ? 'y' : 'r', note: '', ts: w + 0.1 },
           { exercise: 'Присед', equipment: 'barbell', weight: squat, reps: 5, rpe: 'y', note: '', ts: w + 0.2 }
         ]
       });
-      S.checkins.push({ date: day, sleep: w < 3 ? 7.5 : 6, stress: w < 3 ? 4 : 8, calories: 2600 });
-      if (w % 2 === 0) S.weighins.push({ date: day, weight: E.round(p.weight + w * 0.15, 1) });
+      S.checkins.push({ date: day, sleep: w < 3 ? 7.5 : 6, stress: w < 3 ? 4 : 8, calories: 2600, demo: true });
+      if (w % 2 === 0) S.weighins.push({ date: day, weight: E.round(p.weight + w * 0.15, 1), demo: true });
     }
     save();
   }
