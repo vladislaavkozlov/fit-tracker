@@ -62,8 +62,9 @@
   function go(id) {
     $$('.screen').forEach(function (s) { s.classList.toggle('active', s.id === 'screen-' + id); });
     $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.go === id); });
-    window.scrollTo(0, 0);
-    render(id);
+    render(id);                                                                // сначала отрисовать контент…
+    window.scrollTo(0, 0);                                                     // …потом сбросить скролл по финальной высоте
+    if (document.scrollingElement) document.scrollingElement.scrollTop = 0;    // iOS иногда не слушает scrollTo
   }
   function render(id) {
     if (id === 'today') renderToday();

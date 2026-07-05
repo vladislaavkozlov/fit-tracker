@@ -22,7 +22,8 @@ h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
 #app{max-width:520px;margin:0 auto;min-height:100%;position:relative;
   padding:0 0 calc(96px + env(safe-area-inset-bottom))}
 .screen{display:none;padding:0 18px;animation:fade .22s ease}
-.screen.active{display:block}
+/* каждый таб не короче экрана → у всех одинаковая высота, при переключении контент не прыгает */
+.screen.active{display:block;min-height:100vh;min-height:100dvh}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
