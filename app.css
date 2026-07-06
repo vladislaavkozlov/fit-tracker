@@ -228,3 +228,60 @@ canvas{width:100%;height:auto;display:block;border-radius:12px}
 .cal-day.planned{border-color:var(--accent);color:var(--accent);font-weight:700;background:none}
 .cal-day:active{transform:scale(.94)}
 .cal-day.sel{border-color:var(--ink)}
+
+/* ===== раунд 6 ===== */
+:root{ --warmup:#3B9FD1 }
+@media (prefers-color-scheme:dark){ :root{ --warmup:#5AC8FA } }
+:root[data-theme="dark"]{ --warmup:#5AC8FA }
+:root[data-theme="light"]{ --warmup:#3B9FD1 }
+
+/* RPE 4 отметки + разминочный голубой */
+.rpe4 .dot{font-size:12px;gap:6px;padding:0 4px}
+.rpe .dot[data-rpe="w"] .c{background:var(--warmup)}
+.rpe .dot[data-rpe="w"][aria-pressed="true"]{border-color:var(--warmup)}
+.setrow .w{background:var(--warmup)}
+.tag-warm{color:var(--warmup);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+
+/* нумерация подходов */
+.setnum{flex:none;width:22px;height:22px;border-radius:7px;background:var(--panel);border:1px solid var(--line-2);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--ink-2)}
+
+/* заголовок группы + стрелка динамики */
+.exhead-wrap{display:flex;align-items:stretch}
+.exhead-wrap .exhead{flex:1}
+.exarrow{flex:none;width:52px;margin:8px 8px 8px 0;border-radius:12px;border:1px solid var(--line-2);
+  background:var(--panel);font-size:20px;font-weight:800;cursor:pointer}
+.exarrow.up{color:var(--good);border-color:rgba(61,220,116,.4)}
+.exarrow.down{color:var(--bad);border-color:rgba(255,92,71,.4)}
+.exarrow.flat{color:var(--ink-2)}
+.exarrow:active{transform:scale(.94)}
+
+/* фильтр категорий + теги мышц + ссылка техники */
+.catfilter{margin-bottom:10px}
+.tags{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
+.tag{background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;font-size:13px;color:var(--ink-2)}
+.ex-link{display:inline-flex;align-items:center;gap:6px;color:var(--accent);text-decoration:none;font-weight:600;font-size:15px}
+
+/* ===== v6-полировка (дизайн-окно, 06.07.2026) ===== */
+/* иконки групп мышц (инлайн-SVG из assets/muscles, красятся через currentColor) */
+.micon{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.catfilter .chip{display:inline-flex;align-items:center;gap:6px}
+.tag{display:inline-flex;align-items:center;gap:6px}
+.tag .micon{width:14px;height:14px}
+.tag-main{color:var(--accent);border-color:rgba(205,255,61,.35)}
+
+/* лента тяжести в свёрнутой строке упражнения */
+.rpe-strip{display:flex;align-items:center;gap:3px;margin-top:6px}
+.rpe-strip i{width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+.rpe-strip i.rs-g{background:var(--good)}
+.rpe-strip i.rs-y{background:var(--warn)}
+.rpe-strip i.rs-r{background:var(--bad)}
+.rpe-strip i.rs-w{background:var(--warmup)}
+.rpe-strip i.rs-try{background:none;border:1.5px solid var(--ink-3)}
+.rpe-strip em{font-style:normal;font-size:10px;color:var(--ink-3);font-weight:700;margin-left:2px}
+
+/* лучший 1ПМ дня - крупно справа в строке упражнения */
+.exhead-txt{flex:1;min-width:0}
+.exbest{flex:none;display:flex;flex-direction:column;align-items:flex-end;line-height:1.1}
+.exbest b{font-family:var(--round);font-size:18px;font-weight:800;letter-spacing:-.02em}
+.exbest small{font-size:9px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.06em;margin-top:1px}

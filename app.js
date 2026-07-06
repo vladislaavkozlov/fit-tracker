@@ -1,4 +1,4 @@
-/* app.js — фит-трекер MVP. Один SPA, хранение в localStorage. Формулы — из engine.js (не менять). */
+/* app.js - фит-трекер MVP. Один SPA, хранение в localStorage. Формулы - из engine.js (не менять). */
 (function () {
   'use strict';
   var E = window.Engine;
@@ -13,7 +13,7 @@
   /* ---------- storage + миграция (логи не терять) ---------- */
   var KEY = 'fittracker.v1';
   var S = load();
-  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {}, plans: [], templates: [] }; }
+  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {}, plans: [], templates: [], lastWeight: {}, exCat: {} }; }
   function migrate(s) {
     s = s || blank();
     s.profile = s.profile || null;
@@ -23,6 +23,8 @@
     s.equipment = s.equipment || {};                          // память типа снаряда за упражнением
     s.plans = s.plans || [];                                  // планы на будущие/пустые дни (намерение, не факт)
     s.templates = s.templates || [];                          // шаблоны тренировок
+    s.lastWeight = s.lastWeight || {};                        // память последнего веса/повторов за упражнением
+    s.exCat = s.exCat || {};                                  // категория для пользовательских упражнений
     s.sessions.forEach(function (ss) {
       (ss.sets || []).forEach(function (x) { if (!x.equipment) x.equipment = 'barbell'; });   // старые логи = штанга
     });
@@ -32,31 +34,75 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
 
   var SCEN_LABEL = { mass: 'Массонабор', lean: 'Сухой набор', recomp: 'Рекомпозиция', cut: 'Похудение' };
-  var EXERCISES = ['Жим лёжа', 'Присед', 'Становая', 'Жим стоя', 'Подтягивания', 'Тяга штанги', 'Жим гантелей', 'Жим ногами', 'Сгибания на бицепс', 'Разгибания на трицепс', 'Выпады', 'Отжимания на брусьях'];
+  // каталог: категория + задействованные мышцы. Пользовательские упражнения → категория из S.exCat или «другое»
+  var CATALOG = {
+    'Жим лёжа': { cat: 'грудь', m: ['грудь', 'трицепс', 'передняя дельта'] },
+    'Жим гантелей': { cat: 'грудь', m: ['грудь', 'передняя дельта'] },
+    'Отжимания на брусьях': { cat: 'грудь', m: ['грудь', 'трицепс'] },
+    'Тяга штанги': { cat: 'спина', m: ['широчайшие', 'ромбовидные', 'бицепс'] },
+    'Подтягивания': { cat: 'спина', m: ['широчайшие', 'бицепс'] },
+    'Становая': { cat: 'спина', m: ['разгибатели спины', 'ягодицы', 'бицепс бедра'] },
+    'Присед': { cat: 'ноги', m: ['квадрицепс', 'ягодицы'] },
+    'Жим ногами': { cat: 'ноги', m: ['квадрицепс', 'ягодицы'] },
+    'Выпады': { cat: 'ноги', m: ['квадрицепс', 'ягодицы'] },
+    'Жим стоя': { cat: 'плечи', m: ['дельты', 'трицепс'] },
+    'Сгибания на бицепс': { cat: 'руки', m: ['бицепс'] },
+    'Разгибания на трицепс': { cat: 'руки', m: ['трицепс'] }
+  };
+  var CATEGORIES = ['грудь', 'спина', 'ноги', 'плечи', 'руки', 'пресс'];
+  var EXERCISES = Object.keys(CATALOG);
+  // иконки групп мышц: канон - assets/muscles/*.svg, здесь инлайн ради currentColor (через <img> не красятся)
+  var MUSCLE_ICON = {
+    'грудь': 'chest', 'спина': 'back', 'ноги': 'legs', 'плечи': 'shoulders', 'руки': 'arms', 'пресс': 'abs',
+    'трицепс': 'arms', 'бицепс': 'arms', 'предплечья': 'arms',
+    'широчайшие': 'back', 'ромбовидные': 'back', 'разгибатели спины': 'back', 'поясница': 'back',
+    'квадрицепс': 'legs', 'ягодицы': 'legs', 'бицепс бедра': 'legs', 'икры': 'legs',
+    'дельты': 'shoulders', 'передняя дельта': 'shoulders', 'задняя дельта': 'shoulders', 'трапеции': 'shoulders',
+    'кор': 'abs'
+  };
+  var ICON_SVG = {
+    chest: '<path d="M7 4.5h10"/><path d="M5.5 7.5H11v3.75a2.75 2.75 0 1 1-5.5 0z"/><path d="M13 7.5h5.5v3.75a2.75 2.75 0 1 1-5.5 0z"/>',
+    back: '<path d="M6 4.5c0 6 2 10.5 6 15 4-4.5 6-9 6-15"/><path d="M12 8v7.5"/><path d="M8.2 8.5c1.1.9 2.4 1.4 3.8 1.4s2.7-.5 3.8-1.4"/>',
+    legs: '<path d="M8.5 4h7"/><path d="M9.3 4c-1.7 5.5-1.7 10.8.4 16"/><path d="M14.7 4c1.7 5.5 1.7 10.8-.4 16"/><path d="M9.6 13h1.8"/><path d="M12.6 13h1.8"/>',
+    shoulders: '<circle cx="6.2" cy="11.5" r="3.2"/><circle cx="17.8" cy="11.5" r="3.2"/><path d="M9.4 10.2c1.6-1.3 3.6-1.3 5.2 0"/><path d="M10.5 6.8h3"/>',
+    arms: '<path d="M6 19.5c-.8-6.5 1.7-11 6.3-12.4"/><path d="M12.3 7.1 16.6 4.5l2.1 3.4-4 3.1"/><path d="M8.6 15.2c1.2-2.9 4.3-4 6.7-2.3"/>',
+    abs: '<rect x="8" y="4" width="8" height="16" rx="3.2"/><path d="M12 5v14"/><path d="M8.5 9.5h7"/><path d="M8.5 14.5h7"/>'
+  };
+  function muscleIcon(m) {
+    var k = ICON_SVG[MUSCLE_ICON[m] || m];
+    return k ? '<svg class="micon" viewBox="0 0 24 24" aria-hidden="true">' + k + '</svg>' : '';
+  }
+  function exCategory(name) { return (CATALOG[name] && CATALOG[name].cat) || S.exCat[name] || 'другое'; }
+  function exMuscles(name) { return (CATALOG[name] && CATALOG[name].m) || []; }
+  function youtubeUrl(name) { return 'https://www.youtube.com/results?search_query=' + encodeURIComponent(name + ' техника упражнения'); }
 
   /* ---------- снаряд: расчёт эффективного веса, 1ПМ, тоннажа ---------- */
+  var EQUIP_LABEL = { barbell: 'штанга', dumbbell: 'гантели', bodyweight: 'свой вес', machine: 'тренажёр', cross: 'кроссовер' };
+  var EQUIP_ORDER = ['barbell', 'dumbbell', 'machine', 'cross', 'bodyweight'];
   function setEquip(x) { return x.equipment || 'barbell'; }
-  function equipLabel(eq) { return eq === 'dumbbell' ? 'гантели' : eq === 'bodyweight' ? 'свой вес' : 'штанга'; }
+  function equipLabel(eq) { return EQUIP_LABEL[eq] || 'штанга'; }
   function currentBodyweight() { if (S.weighins && S.weighins.length) return S.weighins[S.weighins.length - 1].weight; return S.profile ? S.profile.weight : 0; }
   function effWeight(x) {
     if (setEquip(x) === 'bodyweight') return (x.bodyAt || currentBodyweight() || 0) + (+x.weight || 0);
-    return +x.weight;
+    return +x.weight;                                         // штанга, гантель (на руку), тренажёр, кроссовер - вес как есть
   }
-  function setE1rm(x) { return E.e1rm(effWeight(x), x.reps); }
+  function isWarm(x) { return x.rpe === 'w'; }                // разминочный подход
+  function isWorking(x) { return !isWarm(x) && x.reps > 0; }  // рабочий подход (идёт в 1ПМ/прогресс)
+  function setE1rm(x) { return isWarm(x) ? null : E.e1rm(effWeight(x), x.reps); }
   function setTonnage(x) {
     if (!(x.reps > 0)) return 0;
     var v = effWeight(x) * x.reps;
-    return setEquip(x) === 'dumbbell' ? v * 2 : v;
+    return setEquip(x) === 'dumbbell' ? v * 2 : v;           // разминочные в тоннаж входят (с пометкой в UI)
   }
   function sessionTonnage(sess) { return (sess.sets || []).reduce(function (s, x) { return s + setTonnage(x); }, 0); }
-  function bestE1rmOf(sets) { var b = null; sets.forEach(function (x) { var v = setE1rm(x); if (v != null && (b == null || v > b)) b = v; }); return b; }
+  function bestE1rmOf(sets) { var b = null; sets.forEach(function (x) { if (!isWorking(x)) return; var v = setE1rm(x); if (v != null && (b == null || v > b)) b = v; }); return b; }
   function weightPart(x) {
     var eq = setEquip(x);
     if (eq === 'dumbbell') return '2 × ' + x.weight + ' кг';
     if (eq === 'bodyweight') return 'свой вес' + (+x.weight > 0 ? (' + ' + x.weight + ' кг') : '');
     return x.weight + ' кг';
   }
-  function guessEquip(n) { n = (n || '').toLowerCase(); if (/гантел/.test(n)) return 'dumbbell'; if (/подтяг|отжим|брус|планк|берпи|пресс/.test(n)) return 'bodyweight'; return 'barbell'; }
+  function guessEquip(n) { n = (n || '').toLowerCase(); if (/гантел/.test(n)) return 'dumbbell'; if (/подтяг|отжим|брус|планк|берпи|пресс/.test(n)) return 'bodyweight'; if (/тренаж|блок|кроссовер|машин/.test(n)) return 'machine'; return 'barbell'; }
 
   /* ---------- router ---------- */
   function go(id) {
@@ -96,8 +142,8 @@
     });
   }
   function rpePickerHtml(cur) {
-    var lbl = { g: 'легко', y: 'средне', r: 'тяжело' };
-    return '<div class="rpe">' + ['g', 'y', 'r'].map(function (k) {
+    var lbl = { w: 'разминка', g: 'легко', y: 'средне', r: 'тяжело' };
+    return '<div class="rpe rpe4">' + ['w', 'g', 'y', 'r'].map(function (k) {
       return '<button type="button" class="rpe dot" data-rpe="' + k + '" aria-pressed="' + (cur === k) + '"><span class="c"></span>' + lbl[k] + '</button>';
     }).join('') + '</div>';
   }
@@ -144,8 +190,8 @@
       wrap.innerHTML =
         '<p class="eyebrow">Шаг 2 из 2 · каркас</p>' +
         '<h2 style="font-size:26px;margin-bottom:6px">Замерь запястье и лодыжку</h2>' +
-        '<p class="muted" style="margin:0 0 6px">Кость почти без мышц и жира — она показывает, какой у тебя каркас. Это задаёт ширину прогноза (а не приговор)</p>' +
-        '<p class="note-inline">Мерь сантиметром в самом узком месте: запястье — под косточкой, лодыжку — над щиколоткой</p>' +
+        '<p class="muted" style="margin:0 0 6px">Кость почти без мышц и жира - она показывает, какой у тебя каркас. Это задаёт ширину прогноза (а не приговор)</p>' +
+        '<p class="note-inline">Мерь сантиметром в самом узком месте: запястье - под косточкой, лодыжку - над щиколоткой</p>' +
         '<div class="grid2" style="margin-top:16px">' +
         numField('wrist', 'Запястье, см', draft.wrist || 17) +
         numField('ankle', 'Лодыжка, см', draft.ankle || 22) +
@@ -211,7 +257,7 @@
       box.appendChild(dbadge);
     }
 
-    // Главное действие дня — тренировка (первой)
+    // Главное действие дня - тренировка (первой)
     var act = el('div', 'card');
     var plannedToday = planRemaining(todayStr());
     act.innerHTML = '<p class="eyebrow">Тренировка</p>' +
@@ -222,6 +268,13 @@
     act.appendChild(startBtn);
     box.appendChild(act);
 
+    var od = overdueNote();                                   // #11 «пора» - только если реально пора, иначе молчим
+    if (od && !setsToday) {
+      var odc = el('div', 'card');
+      odc.innerHTML = '<p class="muted" style="margin:0">⏱ ' + od + '</p>';
+      box.appendChild(odc);
+    }
+
     // Готовность / чек-ин: пусто → заметная лаймовая карточка, заполнено → тихая строка значений с правкой
     if (todayCheck) {
       var ready = el('div', 'card tap');
@@ -229,14 +282,14 @@
         stat('Сон', todayCheck.sleep != null ? todayCheck.sleep + ' ч' : 'не запис.') +
         stat('Стресс', todayCheck.stress != null ? todayCheck.stress + '/10' : 'не запис.') +
         stat('Калории', todayCheck.calories != null ? todayCheck.calories + '' : 'не запис.') + '</div>' +
-        '<p class="note-inline">Тап — изменить чек-ин</p>';
+        '<p class="note-inline">Тап - изменить чек-ин</p>';
       ready.onclick = function () { openCheckin(todayStr()); };
       box.appendChild(ready);
     } else {
       var prompt = el('div', 'card checkin-prompt');
       prompt.innerHTML = '<p class="eyebrow" style="color:var(--accent)">Вечерний чек-ин</p>' +
         '<h2 style="font-size:20px;margin-bottom:4px">30 секунд перед сном</h2>' +
-        '<p class="muted" style="margin:0 0 14px">Сон, калории, стресс — топливо для диагностики. Пока не заполнил, приложение их не выдумывает</p>';
+        '<p class="muted" style="margin:0 0 14px">Сон, калории, стресс - топливо для диагностики. Пока не заполнил, приложение их не выдумывает</p>';
       var pb = el('button', 'btn', 'Заполнить чек-ин');
       pb.onclick = function () { openCheckin(todayStr()); };
       prompt.appendChild(pb);
@@ -266,6 +319,24 @@
       demo.appendChild(db);
       box.appendChild(demo);
     }
+
+    // Данные и поддержка (#14, #17)
+    var settings = el('div', 'card');
+    settings.innerHTML = '<p class="eyebrow">Данные и поддержка</p>' +
+      '<p class="muted" style="margin:0 0 12px">Бэкап и перенос между устройствами - файлом. Всё хранится только на телефоне</p>';
+    var exp = el('button', 'btn ghost slim', 'Экспорт истории (файл)');
+    exp.onclick = exportData;
+    var imp = el('button', 'btn ghost slim', 'Импорт из файла');
+    imp.style.marginTop = '10px';
+    imp.onclick = function () { $('#import-file').click(); };
+    var sup = el('button', 'btn ghost slim', 'Сообщить о баге / идее');
+    sup.style.marginTop = '10px';
+    sup.onclick = openSupport;
+    var fileInput = el('input');
+    fileInput.type = 'file'; fileInput.id = 'import-file'; fileInput.accept = 'application/json,.json'; fileInput.style.display = 'none';
+    fileInput.onchange = function () { importDataFile(fileInput.files && fileInput.files[0]); fileInput.value = ''; };
+    settings.appendChild(exp); settings.appendChild(imp); settings.appendChild(sup); settings.appendChild(fileInput);
+    box.appendChild(settings);
   }
   function stat(k, v) { return '<div class="stat"><div class="k">' + k + '</div><div class="v mono">' + v + '</div></div>'; }
 
@@ -288,7 +359,7 @@
 
   /* ---------- Logger ---------- */
   var logState = { exercise: 'Жим лёжа', equipment: 'barbell', weight: 60, reps: 8, rpe: null, note: '', _pin: false };
-  var logDate = null;                                        // null = сегодня; иначе — запись задним числом
+  var logDate = null;                                        // null = сегодня; иначе - запись задним числом
   function activeDate() { return logDate || todayStr(); }
   function lastSetOf(name) {
     var sorted = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
@@ -300,7 +371,9 @@
   }
   function prefillFor(name) {
     logState.equipment = S.equipment[name] || logState.equipment || guessEquip(name);
-    if (logState._pin) { logState._pin = false; return; }   // значение пришло из плана — не перетирать
+    if (logState._pin) { logState._pin = false; return; }   // значение пришло из плана - не перетирать
+    var lw = S.lastWeight[name];                             // #4 память веса именно за этим упражнением
+    if (lw) { logState.weight = lw.weight; logState.reps = lw.reps; return; }
     var last = lastSetOf(name);
     if (last) { logState.weight = last.weight; logState.reps = last.reps; }
   }
@@ -316,13 +389,12 @@
     }
     return out;
   }
+  var logSetOpen = {};
   function renderLogger() {
     var box = $('#logger-body');
-    prefillFor(logState.exercise);
     var date = activeDate();
     var sess = sessionOf(date);
     var hasSets = sess && sess.sets.length;
-    var unit = logState.equipment === 'dumbbell' ? 'вес гантели, кг' : logState.equipment === 'bodyweight' ? 'довесок, кг' : 'вес, кг';
 
     var banner = '';
     if (logDate && logDate !== todayStr()) banner += '<div class="backdate">Запись за ' + prettyDate(logDate) + '<button type="button" id="lg-exit">закрыть</button></div>';
@@ -331,38 +403,67 @@
       remaining.map(function (it, i) { return '<button type="button" class="pick" data-pi="' + i + '">' + escapeHtml(it.exercise) + '</button>'; }).join('') + '</div></div>';
 
     box.innerHTML = banner +
-      '<div class="field"><label>Упражнение</label>' +
-      '<button type="button" class="txt pickfield" id="lg-ex"><span>' + escapeHtml(logState.exercise) + '</span><span class="muted">' + equipLabel(logState.equipment) + ' ›</span></button></div>' +
-      '<div class="grid2">' + stepper('weight', unit, logState.weight, 2.5, 'decimal') + stepper('reps', 'повторы', logState.reps, 1, 'numeric') + '</div>' +
-      '<div id="e1rm-live" class="card" style="text-align:center;padding:14px;margin:4px 0 14px"></div>' +
-      '<div class="field"><label>Как дался подход?</label>' + rpePickerHtml(logState.rpe) + '</div>' +
-      '<div class="field"><input class="txt" id="lg-note" placeholder="Заметка (напр. подстраховали на последнем)" value="' + escapeHtml(logState.note || '') + '"></div>' +
-      '<button class="btn" id="lg-add">✓ Записать подход</button>' +
-      '<div id="lg-sets" style="margin-top:18px"></div>' +
+      (hasSets
+        ? '<div id="lg-sets"></div>'
+        : '<div class="card"><p class="muted" style="margin:0 0 12px">Пустая тренировка. Добавь первый подход' + (S.templates.length ? ' или начни по готовому шаблону' : '') + '</p>' +
+          (S.templates.length ? '<button class="btn" id="lg-tpl-start">Начать по шаблону</button>' : '') + '</div>') +
+      '<button class="btn" id="lg-add" style="margin-top:8px">+ Добавить подход</button>' +
       '<div class="hr"></div>' +
       (hasSets ? '<button class="btn ghost slim" id="lg-tpl-save">Сохранить как шаблон</button>' : '') +
-      (S.templates.length ? '<button class="btn ghost slim" id="lg-tpl-use" style="margin-top:10px">Начать по шаблону</button>' : '') +
+      (hasSets && S.templates.length ? '<button class="btn ghost slim" id="lg-tpl-use" style="margin-top:10px">Добавить из шаблона</button>' : '') +
       '<button class="btn ghost slim" id="lg-finish" style="margin-top:10px">Завершить тренировку</button>';
 
     if ($('#lg-exit')) $('#lg-exit').onclick = function () { logDate = null; go('history'); };
-    $$('#lg-plan .pick').forEach(function (b) { b.onclick = function () { var it = remaining[+b.dataset.pi]; logState.exercise = it.exercise; logState.equipment = it.equipment || S.equipment[it.exercise] || guessEquip(it.exercise); if (it.weight) logState.weight = it.weight; if (it.reps) logState.reps = it.reps; logState._pin = true; renderLogger(); }; });
-    $('#lg-ex').onclick = function () { openExercisePicker(); };
-    bindStepperEl(box, logState, updateE1rmLive);
-    bindRpe(box, logState);
-    $('#lg-note').oninput = function () { logState.note = this.value; };
-    $('#lg-add').onclick = addSet;
-    if ($('#lg-tpl-save')) $('#lg-tpl-save').onclick = function () { openSaveTemplate(sessionOf(date).sets); };
+    $$('#lg-plan .pick').forEach(function (b) { b.onclick = function () { var it = remaining[+b.dataset.pi]; logState.exercise = it.exercise; logState.equipment = it.equipment || S.equipment[it.exercise] || guessEquip(it.exercise); if (it.weight) logState.weight = it.weight; if (it.reps) logState.reps = it.reps; logState._pin = true; openAddSet(date); }; });
+    $('#lg-add').onclick = function () { openAddSet(date); };
+    if ($('#lg-tpl-start')) $('#lg-tpl-start').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
     if ($('#lg-tpl-use')) $('#lg-tpl-use').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
+    if ($('#lg-tpl-save')) $('#lg-tpl-save').onclick = function () { openSaveTemplate(sessionOf(date).sets); };
     $('#lg-finish').onclick = function () { var back = logDate ? 'history' : 'today'; logDate = null; toast('Тренировка сохранена'); go(back); };
-    updateE1rmLive();
     renderSetList();
+  }
+  // шторка добавления подхода (#2): список виден на экране, форма всплывает только тут
+  function openAddSet(date) {
+    date = date || activeDate();
+    prefillFor(logState.exercise);
+    var unit = logState.equipment === 'dumbbell' ? 'вес гантели, кг' : logState.equipment === 'bodyweight' ? 'довесок, кг' : 'вес, кг';
+    openSheet(
+      '<p class="eyebrow">Добавить подход' + (date !== todayStr() ? ' · ' + prettyDate(date) : '') + '</p>' +
+      '<button type="button" class="txt pickfield" id="as-ex" style="margin-bottom:12px"><span>' + escapeHtml(logState.exercise) + '</span><span class="muted">' + equipLabel(logState.equipment) + ' ›</span></button>' +
+      '<div class="grid2">' + stepper('weight', unit, logState.weight, 2.5, 'decimal') + stepper('reps', 'повторы', logState.reps, 1, 'numeric') + '</div>' +
+      '<div id="e1rm-live" class="card" style="text-align:center;padding:12px;margin:4px 0 12px"></div>' +
+      '<div class="field"><label>Как дался подход?</label>' + rpePickerHtml(logState.rpe) + '</div>' +
+      '<div class="field"><input class="txt" id="as-note" placeholder="Заметка (напр. подстраховали)" value="' + escapeHtml(logState.note || '') + '"></div>' +
+      '<button class="btn" id="as-add">✓ Записать подход</button>' +
+      '<button class="btn ghost slim" id="as-done" style="margin-top:10px">Готово</button>');
+    $('#as-ex').onclick = function () { openExercisePicker(function (name, eq) { logState.exercise = name; logState.equipment = eq; openAddSet(date); }); };
+    bindStepperEl($('#sheet'), logState, updateE1rmLive);
+    bindRpe($('#sheet'), logState);
+    $('#as-note').oninput = function () { logState.note = this.value; };
+    $('#as-add').onclick = function () { commitSet(date); toast('Подход записан'); openAddSet(date); };
+    $('#as-done').onclick = function () { closeSheet(); renderLogger(); };
+    updateE1rmLive();
+  }
+  function commitSet(date) {
+    date = date || activeDate();
+    var sess = ensureSession(date);
+    var rec = { exercise: logState.exercise, equipment: logState.equipment, weight: +logState.weight, reps: +logState.reps, rpe: logState.rpe, note: (logState.note || '').trim() };
+    rec.ts = (logDate && logDate !== todayStr()) ? (new Date(date).getTime() + sess.sets.length) : Date.now();
+    if (logState.equipment === 'bodyweight') rec.bodyAt = currentBodyweight();
+    sess.sets.push(rec);
+    S.lastWeight[rec.exercise] = { weight: rec.weight, reps: rec.reps, equipment: rec.equipment };   // #4
+    save();
+    logSetOpen[rec.exercise] = true;
+    logState.note = ''; logState.rpe = null;
+    if (navigator.vibrate) navigator.vibrate(15);
   }
   function updateE1rmLive() {
     var box = $('#e1rm-live'); if (!box) return;
-    var synth = { equipment: logState.equipment, weight: logState.weight, reps: logState.reps };
+    var synth = { equipment: logState.equipment, weight: logState.weight, reps: logState.reps, rpe: logState.rpe };
+    if (isWarm(synth)) { box.innerHTML = '<span class="tag-warm">Разминочный</span><div class="muted" style="margin-top:4px">не идёт в 1ПМ и прогресс, но входит в тоннаж</div>'; return; }
     var v = setE1rm(synth);
     if (v == null) {
-      box.innerHTML = '<span class="tag-try">Попытка</span><div class="muted" style="margin-top:4px">0 повторов — в прогресс не идёт, только заметка</div>';
+      box.innerHTML = '<span class="tag-try">Попытка</span><div class="muted" style="margin-top:4px">0 повторов - в прогресс не идёт, только заметка</div>';
     } else {
       var suffix = logState.equipment === 'dumbbell' ? ' <span class="muted" style="font-size:15px">/рука</span>' : '';
       var effNote = logState.equipment === 'bodyweight' ? ('<div class="note-inline">эффективный вес ≈ ' + E.round(effWeight(synth), 1) + ' кг (свой вес' + (+logState.weight > 0 ? ' + довесок' : '') + ')</div>') : '';
@@ -371,38 +472,25 @@
       $('#e1-info').onclick = openInfo1rm;
     }
   }
-  function addSet() {
-    var date = activeDate();
-    var sess = ensureSession(date);
-    var rec = { exercise: logState.exercise, equipment: logState.equipment, weight: +logState.weight, reps: +logState.reps, rpe: logState.rpe, note: (logState.note || '').trim() };
-    rec.ts = logDate ? (new Date(date).getTime() + sess.sets.length) : Date.now();
-    if (logState.equipment === 'bodyweight') rec.bodyAt = currentBodyweight();
-    sess.sets.push(rec); save();
-    logSetOpen[rec.exercise] = true;                          // раскрыть упражнение, чтобы новый подход был виден
-    logState.note = ''; logState.rpe = null;
-    if (navigator.vibrate) navigator.vibrate(15);
-    renderLogger();
-  }
-  var logSetOpen = {};
   function renderSetList() {
     var box = $('#lg-sets'); if (!box) return;
     var date = activeDate();
     var sess = sessionOf(date);
     var sets = sess ? sess.sets : [];
-    if (!sets.length) { box.innerHTML = '<p class="muted" style="text-align:center">Пока нет подходов' + (logDate ? ' за этот день' : ' сегодня') + '</p>'; return; }
-    if (logSetOpen[logState.exercise] == null) logSetOpen[logState.exercise] = true;   // текущее упражнение раскрыто
-    box.innerHTML = '<p class="eyebrow">' + (logDate && logDate !== todayStr() ? prettyDate(date) : 'Записано сегодня') + '</p>' +
+    if (!sets.length) { box.innerHTML = ''; return; }
+    if (logSetOpen[logState.exercise] == null) logSetOpen[logState.exercise] = true;
+    box.innerHTML = '<div class="card"><p class="eyebrow">' + (logDate && logDate !== todayStr() ? prettyDate(date) : 'Записано сегодня') + '</p>' +
       '<div class="statrow" style="margin:0 0 10px">' + stat('Упражнений', groupSets(sess).length) + stat('Подходов', sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
-      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению — раскрыть подходы, тап по подходу — изменить</p>' +
-      groupedHtml(sess, logSetOpen);
-    $$('#lg-sets .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; logSetOpen[k] = !logSetOpen[k]; renderSetList(); }; });
-    $$('#lg-sets .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, renderLogger); }; });
+      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению - раскрыть, ↑↓ - динамика, тап по подходу - изменить</p>' +
+      groupedHtml(sess, logSetOpen) + '</div>';
+    bindGrouped('#lg-sets', sess, logSetOpen, renderSetList, renderLogger);
   }
-  function setRowHtml(x, sid, idx) {
+  function setRowHtml(x, sid, idx, num) {
     var color = x.rpe ? '<span class="c ' + x.rpe + '"></span>' : '<span class="c" style="background:var(--line-2)"></span>';
-    var meta = x.reps > 0 ? ('1ПМ ' + setE1rm(x) + ' кг' + (setEquip(x) === 'dumbbell' ? ' /рука' : '')) : '<span class="tag-try">попытка</span>';
-    return '<button type="button" class="setrow" data-sid="' + sid + '" data-idx="' + idx + '">' + color +
-      '<div><div class="load mono">' + escapeHtml(x.exercise) + ' · ' + weightPart(x) + ' × ' + x.reps + '</div>' +
+    var meta = isWarm(x) ? '<span class="tag-warm">разминка</span>' : (x.reps > 0 ? ('1ПМ ' + setE1rm(x) + ' кг' + (setEquip(x) === 'dumbbell' ? ' /рука' : '')) : '<span class="tag-try">попытка</span>');
+    return '<button type="button" class="setrow" data-sid="' + sid + '" data-idx="' + idx + '">' +
+      (num ? '<span class="setnum mono">' + num + '</span>' : '') + color +
+      '<div><div class="load mono">' + weightPart(x) + ' × ' + x.reps + '</div>' +
       (x.note ? '<div class="muted" style="font-size:13px">' + escapeHtml(x.note) + '</div>' : '') +
       '</div><div class="meta">' + meta + '</div></button>';
   }
@@ -416,47 +504,142 @@
     });
     return groups;
   }
+  function prevSessionBest(sess, name) {
+    var earlier = S.sessions.filter(function (s) { return s.date < sess.date; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    for (var i = earlier.length - 1; i >= 0; i--) {
+      var b = bestE1rmOf(earlier[i].sets.filter(function (x) { return x.exercise === name; }));
+      if (b != null) return { best: b, date: earlier[i].date };
+    }
+    return null;
+  }
+  function exerciseArrow(sess, name, curBest) {
+    if (curBest == null) return null;
+    var prev = prevSessionBest(sess, name); if (!prev) return null;
+    var d = E.round(curBest - prev.best, 1);
+    var cls = d > 0.05 ? 'up' : d < -0.05 ? 'down' : 'flat';
+    return { sym: cls === 'up' ? '↑' : cls === 'down' ? '↓' : '→', cls: cls, prev: prev.best, cur: curBest, delta: d };
+  }
+  // лента тяжести подходов в свёрнутой строке: з/ж/к, разминка голубым, попытка контуром (спека v6)
+  function rpeStripHtml(items) {
+    var dots = items.map(function (o) {
+      var x = o.set;
+      return isWarm(x) ? 'rs-w' : (x.reps > 0 ? (x.rpe ? 'rs-' + x.rpe : 'rs-n') : 'rs-try');
+    });
+    var extra = dots.length > 8 ? dots.length - 7 : 0;
+    var shown = extra ? dots.slice(0, 7) : dots;
+    return '<span class="rpe-strip">' + shown.map(function (c) { return '<i class="' + c + '"></i>'; }).join('') +
+      (extra ? '<em>+' + extra + '</em>' : '') + '</span>';
+  }
   function groupedHtml(sess, openMap) {
     return groupSets(sess).map(function (g) {
       var isOpen = !!openMap[g.exercise];
-      var best = bestE1rmOf(g.items.map(function (o) { return o.set; }));
-      var sub = g.items.length + ' подх.' + (g.equipment !== 'barbell' ? ' · ' + equipLabel(g.equipment) : '') + (best != null ? ' · 1ПМ ' + best + ' кг' : '');
-      return '<div class="exgroup">' +
+      var sets = g.items.map(function (o) { return o.set; });
+      var best = bestE1rmOf(sets);
+      var arrow = exerciseArrow(sess, g.exercise, best);
+      var wk = sets.filter(isWorking).length;
+      var warm = sets.filter(isWarm).length;
+      var tries = sets.length - wk - warm;
+      var ton = Math.round(sets.reduce(function (a, x) { return a + setTonnage(x); }, 0));
+      var sub = wk + ' раб.' + (warm ? ' · разм. ' + warm : '') + (tries ? ' · попытка' : '') +
+        (g.equipment !== 'barbell' ? ' · ' + equipLabel(g.equipment) : '') + (ton ? ' · ' + ton + ' кг' : '');
+      return '<div class="exgroup"><div class="exhead-wrap">' +
         '<button type="button" class="exhead" data-ex="' + escapeHtml(g.exercise) + '">' +
-        '<div class="exhead-txt"><div class="exname">' + escapeHtml(g.exercise) + '</div><div class="exsub muted">' + sub + '</div></div>' +
+        '<div class="exhead-txt"><div class="exname">' + escapeHtml(g.exercise) + '</div><div class="exsub muted">' + sub + '</div>' +
+        (isOpen ? '' : rpeStripHtml(g.items)) + '</div>' +
+        (best != null ? '<span class="exbest"><b class="mono">' + best + '</b><small>1ПМ кг</small></span>' : '') +
         '<span class="exchevron">' + (isOpen ? '▾' : '▸') + '</span></button>' +
-        (isOpen ? ('<div class="exsets">' + g.items.map(function (o) { return setRowHtml(o.set, sess.id, o.i); }).join('') + '</div>') : '') +
+        (arrow ? '<button type="button" class="exarrow ' + arrow.cls + '" data-arrow="' + escapeHtml(g.exercise) + '">' + arrow.sym + '</button>' : '') +
+        '</div>' +
+        (isOpen ? ('<div class="exsets">' + g.items.map(function (o, k) { return setRowHtml(o.set, sess.id, o.i, k + 1); }).join('') + '</div>') : '') +
         '</div>';
     }).join('');
   }
+  // общий биндинг раскрытия/стрелок/правки для сгруппированного списка
+  function bindGrouped(scope, sess, openMap, rerender, afterEdit) {
+    $$(scope + ' .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; openMap[k] = !openMap[k]; rerender(); }; });
+    $$(scope + ' .exarrow').forEach(function (b) { b.onclick = function () { openArrowSheet(sess, b.dataset.arrow); }; });
+    $$(scope + ' .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, afterEdit); }; });
+  }
+  function openArrowSheet(sess, name) {
+    var best = bestE1rmOf(sess.sets.filter(function (x) { return x.exercise === name; }));
+    var a = exerciseArrow(sess, name, best);
+    var body;
+    if (!a) { body = '<p class="muted">Пока не с чем сравнить - это первая тренировка с этим упражнением. В следующий раз покажу динамику</p>'; }
+    else {
+      var pct = a.prev > 0 ? E.round(a.delta / a.prev * 100, 1) : 0;
+      var word = a.cls === 'up' ? 'сильнее' : a.cls === 'down' ? 'слабее' : 'без изменений';
+      body = '<div class="statrow" style="margin:6px 0 12px">' + stat('Прошлый раз', a.prev + ' кг') + stat('Сейчас', a.cur + ' кг') + '</div>' +
+        '<p class="' + (a.cls === 'up' ? 'muted' : 'muted') + '" style="margin:0">Расчётный 1ПМ ' + (a.delta >= 0 ? '+' : '') + a.delta + ' кг (' + (pct >= 0 ? '+' : '') + pct + '%) - ты стал ' + word + ' против прошлой тренировки этого упражнения</p>' +
+        '<p class="note-inline">Разминочные подходы в сравнение не идут. Общий прогноз тела по массе - на вкладке «Прогноз»</p>';
+    }
+    openSheet('<p class="eyebrow">' + escapeHtml(name) + '</p><h2 style="margin-bottom:6px">Динамика силы</h2>' + body +
+      '<button class="btn" id="ar-stats" style="margin-top:14px">Открыть статистику</button>' +
+      '<button class="btn ghost slim" id="ar-close" style="margin-top:10px">Закрыть</button>');
+    $('#ar-stats').onclick = function () { openExerciseStats(name); };
+    $('#ar-close').onclick = closeSheet;
+  }
 
   /* ---------- exercise picker + equipment ---------- */
-  function openExercisePicker(onPick) {
+  function allKnownExercises() {
+    var all = EXERCISES.slice();
+    uniqueExercises().forEach(function (n) { if (all.indexOf(n) < 0) all.push(n); });   // + пользовательские
+    return all;
+  }
+  function openExercisePicker(onPick, catFilter) {
     var recent = recentExercises(6);
-    var rest = EXERCISES.filter(function (n) { return recent.indexOf(n) < 0; });
+    var rest = allKnownExercises().filter(function (n) { return recent.indexOf(n) < 0; });
+    if (catFilter && catFilter !== 'все') rest = rest.filter(function (n) { return exCategory(n) === catFilter; });
+    var catChips = '<div class="chips catfilter">' + ['все'].concat(CATEGORIES).map(function (c) { return '<button class="chip" data-cat="' + c + '" aria-pressed="' + ((catFilter || 'все') === c) + '">' + (c === 'все' ? '' : muscleIcon(c)) + c + '</button>'; }).join('') + '</div>';
     var html = '<p class="eyebrow">Упражнение</p><h2 style="margin-bottom:12px">Что делаешь?</h2>';
-    if (recent.length) html += '<div class="lbl2">Недавние</div><div class="picklist">' + recent.map(pickBtn).join('') + '</div>';
-    html += '<div class="lbl2">Все упражнения</div><div class="picklist">' + rest.map(pickBtn).join('') + '</div>' +
+    if (recent.length && (!catFilter || catFilter === 'все')) html += '<div class="lbl2">Недавние</div><div class="picklist">' + recent.map(pickBtn).join('') + '</div>';
+    html += '<div class="lbl2">Все упражнения</div>' + catChips +
+      '<div class="picklist">' + (rest.length ? rest.map(pickBtn).join('') : '<p class="muted">Нет упражнений в этой категории</p>') + '</div>' +
+      '<button class="btn ghost slim" id="pk-past" style="margin-top:10px">Из прошлой тренировки…</button>' +
       '<div class="hr"></div><div class="field"><input class="txt" id="pk-custom" placeholder="Название своего упражнения"></div>' +
       '<button class="btn ghost slim" id="pk-add">+ Добавить своё</button>' +
       '<button class="btn ghost slim" id="pk-cancel" style="margin-top:10px">Отмена</button>';
     openSheet(html);
-    $$('#sheet .pick').forEach(function (b) { b.onclick = function () { pickExercise(b.dataset.name, onPick); }; });
+    $$('#sheet .catfilter .chip').forEach(function (b) { b.onclick = function () { openExercisePicker(onPick, b.dataset.cat); }; });
+    $$('#sheet .picklist .pick').forEach(function (b) { b.onclick = function () { pickExercise(b.dataset.name, onPick); }; });
+    $('#pk-past').onclick = function () { openPastDayPicker(onPick); };
     $('#pk-add').onclick = function () { var v = $('#pk-custom').value.trim(); if (v) pickExercise(v, onPick); else toast('Введи название'); };
     $('#pk-cancel').onclick = closeSheet;
   }
+  function openPastDayPicker(onPick) {
+    var days = S.sessions.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; }).slice(0, 20);
+    if (!days.length) { toast('Пока нет прошлых тренировок'); return; }
+    openSheet('<p class="eyebrow">Из прошлой тренировки</p><h2 style="margin-bottom:12px">Выбери день</h2>' +
+      days.map(function (s) { var exs = uniq(s.sets.map(function (x) { return x.exercise; })); return '<button type="button" class="plan-item daybtn" data-date="' + s.date + '"><span><b>' + prettyDate(s.date) + '</b><div class="muted" style="font-size:13px">' + exs.map(escapeHtml).join(', ') + '</div></span><span class="muted">›</span></button>'; }).join('') +
+      '<button class="btn ghost slim" id="pd-back" style="margin-top:12px">Назад</button>');
+    $$('#sheet .daybtn').forEach(function (b) { b.onclick = function () { openDayExercisePicker(b.dataset.date, onPick); }; });
+    $('#pd-back').onclick = function () { openExercisePicker(onPick); };
+  }
+  function openDayExercisePicker(date, onPick) {
+    var s = sessionOf(date); if (!s) return;
+    var exs = uniq(s.sets.map(function (x) { return x.exercise; }));
+    openSheet('<p class="eyebrow">' + prettyDate(date) + '</p><h2 style="margin-bottom:12px">Упражнение из этого дня</h2><div class="picklist">' + exs.map(pickBtn).join('') + '</div><button class="btn ghost slim" id="dx-back" style="margin-top:12px">Назад</button>');
+    $$('#sheet .picklist .pick').forEach(function (b) { b.onclick = function () { pickExercise(b.dataset.name, onPick); }; });
+    $('#dx-back').onclick = function () { openPastDayPicker(onPick); };
+  }
+  function uniq(a) { var seen = {}, out = []; a.forEach(function (x) { if (!seen[x]) { seen[x] = 1; out.push(x); } }); return out; }
   function pickBtn(n) { return '<button type="button" class="pick" data-name="' + escapeHtml(n) + '">' + escapeHtml(n) + '</button>'; }
+  var EQ_LABEL_CAP = { barbell: 'Штанга', dumbbell: 'Гантели', machine: 'Тренажёр', cross: 'Кроссовер', bodyweight: 'Свой вес' };
   function pickExercise(name, onPick) {
     var eq = S.equipment[name] || guessEquip(name);
-    function hint(e) { return e === 'dumbbell' ? 'Вводи вес ОДНОЙ гантели — в журнале покажу «2 × вес», тоннаж посчитаю за обе' : e === 'bodyweight' ? 'Нагрузка = твой вес тела; довесок укажешь в поле веса' : 'Вес штанги как есть'; }
-    var html = '<p class="eyebrow">' + escapeHtml(name) + '</p><h2 style="margin-bottom:4px">На чём делаешь?</h2>' +
+    function hint(e) { return e === 'dumbbell' ? 'Вводи вес ОДНОЙ гантели - в журнале покажу «2 × вес», тоннаж посчитаю за обе' : e === 'bodyweight' ? 'Нагрузка = твой вес тела; довесок укажешь в поле веса' : e === 'machine' ? 'Вес по стеку тренажёра, как есть' : e === 'cross' ? 'Вес по стеку кроссовера, как есть' : 'Вес штанги как есть'; }
+    var muscles = exMuscles(name);
+    var html = '<p class="eyebrow">' + escapeHtml(name) + ' · ' + exCategory(name) + '</p><h2 style="margin-bottom:4px">На чём делаешь?</h2>' +
       '<p class="muted" style="margin:0 0 14px">Запомню для этого упражнения</p>' +
       '<div class="chips" id="eq-pick">' +
-      ['barbell', 'dumbbell', 'bodyweight'].map(function (v) { return '<button class="chip" data-val="' + v + '" aria-pressed="' + (eq === v) + '">' + { barbell: 'Штанга', dumbbell: 'Гантели', bodyweight: 'Свой вес' }[v] + '</button>'; }).join('') +
+      EQUIP_ORDER.map(function (v) { return '<button class="chip" data-val="' + v + '" aria-pressed="' + (eq === v) + '">' + EQ_LABEL_CAP[v] + '</button>'; }).join('') +
       '</div><p class="note-inline" id="eq-hint">' + hint(eq) + '</p>' +
       '<button class="btn" id="eq-done">Готово</button>' +
+      '<button class="btn ghost slim" id="eq-stats" style="margin-top:10px">Статистика упражнения</button>' +
       '<button class="btn ghost slim" id="eq-back" style="margin-top:10px">← Назад к списку</button>' +
-      '<button class="btn ghost slim" id="eq-cancel" style="margin-top:10px">Отмена</button>';
+      '<button class="btn ghost slim" id="eq-cancel" style="margin-top:10px">Отмена</button>' +
+      '<div class="hr"></div>' +
+      (muscles.length ? '<div class="tags">' + muscles.map(function (m, i) { return '<span class="tag' + (i === 0 ? ' tag-main' : '') + '">' + muscleIcon(m) + escapeHtml(m) + '</span>'; }).join('') + '</div>' : '') +
+      '<a class="ex-link" href="' + youtubeUrl(name) + '" target="_blank" rel="noopener">↗ Техника на YouTube</a>';
     openSheet(html);
     var sel = eq;
     $$('#eq-pick .chip').forEach(function (c) {
@@ -465,6 +648,7 @@
         c.setAttribute('aria-pressed', 'true'); sel = c.dataset.val; $('#eq-hint').textContent = hint(sel);
       };
     });
+    $('#eq-stats').onclick = function () { openExerciseStats(name); };
     $('#eq-back').onclick = function () { openExercisePicker(onPick); };
     $('#eq-cancel').onclick = closeSheet;
     $('#eq-done').onclick = function () {
@@ -559,10 +743,10 @@
       '<h2>Как прошёл день?</h2>' +
       '<div class="field" style="margin-top:16px"><label>Сон прошлой ночью, часов</label>' +
       '<div class="slider"><input type="range" id="ci-sleep" min="3" max="11" step="0.5" value="' + sleepPos + '"><span class="sv mono" id="ci-sleep-v">' + (touched.sleep ? val.sleep : '—') + '</span></div>' +
-      '<p class="note-inline" id="ci-sleep-h">' + (touched.sleep ? '' : 'не указано — тронь ползунок, если хочешь записать') + '</p></div>' +
+      '<p class="note-inline" id="ci-sleep-h">' + (touched.sleep ? '' : 'не указано - тронь ползунок, если хочешь записать') + '</p></div>' +
       '<div class="field"><label>Уровень стресса</label>' +
       '<div class="slider"><input type="range" id="ci-stress" min="1" max="10" step="1" value="' + stressPos + '"><span class="sv mono" id="ci-stress-v">' + (touched.stress ? val.stress : '—') + '</span></div>' +
-      '<p class="note-inline" id="ci-stress-h">' + (touched.stress ? '' : 'не указано — тронь ползунок, если хочешь записать') + '</p></div>' +
+      '<p class="note-inline" id="ci-stress-h">' + (touched.stress ? '' : 'не указано - тронь ползунок, если хочешь записать') + '</p></div>' +
       '<div class="field"><label>Калории за день <span class="opt">если считаешь</span></label>' +
       '<input class="txt mono" type="number" inputmode="numeric" id="ci-cal" placeholder="не указано" value="' + calVal + '"></div>' +
       '<button class="btn" id="ci-save">Сохранить</button>' +
@@ -576,7 +760,7 @@
       var cal = $('#ci-cal').value !== '' ? +$('#ci-cal').value : null;
       var rec = { date: date, sleep: touched.sleep ? val.sleep : null, stress: touched.stress ? val.stress : null, calories: cal };
       S.checkins = S.checkins.filter(function (c) { return c.date !== date; });
-      if (rec.sleep == null && rec.stress == null && rec.calories == null) { save(); closeSheet(); toast('Пусто — чек-ин не сохранён'); refreshAfterCheckin(date); return; }
+      if (rec.sleep == null && rec.stress == null && rec.calories == null) { save(); closeSheet(); toast('Пусто - чек-ин не сохранён'); refreshAfterCheckin(date); return; }
       S.checkins.push(rec); save(); closeSheet(); toast('Чек-ин записан'); refreshAfterCheckin(date);
     };
   }
@@ -610,7 +794,7 @@
     $('#cal-next').onclick = function () { renderCalendar._month = new Date(y, mo + 1, 1); renderCalendar(); };
     $$('#history-body .cal-day[data-date]').forEach(function (b) { b.onclick = function () { onCalDay(b.dataset.date); }; });
     if (renderCalendar._sel && counts[renderCalendar._sel]) renderDayDetail(renderCalendar._sel);
-    else $('#hist-detail').innerHTML = '<p class="empty">Тапни день: с тренировкой — посмотреть, будущий — запланировать, прошлый пустой — записать задним числом</p>';
+    else $('#hist-detail').innerHTML = '<p class="empty">Тапни день: с тренировкой - посмотреть, будущий - запланировать, прошлый пустой - записать задним числом</p>';
   }
   function onCalDay(ds) {
     var t = todayStr();
@@ -636,14 +820,14 @@
     function draw() {
       var itemsHtml = editing.items.length ? editing.items.map(function (it, i) {
         return '<div class="plan-item"><span>' + escapeHtml(it.exercise) + ' <span class="muted">· ' + equipLabel(it.equipment) + '</span></span><button type="button" class="rm" data-i="' + i + '">✕</button></div>';
-      }).join('') : '<p class="muted">Пока пусто — добавь упражнения</p>';
+      }).join('') : '<p class="muted">Пока пусто - добавь упражнения</p>';
       openSheet('<p class="eyebrow">План на ' + prettyDate(ds) + '</p><h2 style="margin-bottom:12px">Запланировать тренировку</h2>' +
         '<div id="pl-items">' + itemsHtml + '</div>' +
         '<button class="btn ghost slim" id="pl-add" style="margin-top:10px">+ Добавить упражнение</button>' +
         (S.templates.length ? '<button class="btn ghost slim" id="pl-tpl" style="margin-top:10px">Взять из шаблона</button>' : '') +
         '<button class="btn" id="pl-save" style="margin-top:14px">Сохранить план</button>' +
         (plan ? '<button class="btn ghost slim" id="pl-del" style="margin-top:10px;color:var(--bad)">Удалить план</button>' : '') +
-        '<p class="note-inline">План — это намерение. В тоннаж, прогноз и диагностику он не идёт, только напомнит в этот день</p>');
+        '<p class="note-inline">План - это намерение. В тоннаж, прогноз и диагностику он не идёт, только напомнит в этот день</p>');
       $$('#pl-items .rm').forEach(function (b) { b.onclick = function () { editing.items.splice(+b.dataset.i, 1); draw(); }; });
       $('#pl-add').onclick = function () { openExercisePicker(function (name, eq) { editing.items.push({ exercise: name, equipment: eq }); draw(); }); };
       if ($('#pl-tpl')) $('#pl-tpl').onclick = function () { chooseTemplate(function (t) { t.items.forEach(function (it) { editing.items.push({ exercise: it.exercise, equipment: it.equipment, weight: it.weight, reps: it.reps }); }); draw(); }); };
@@ -667,18 +851,31 @@
       : '<button type="button" class="checkin-row" id="dd-checkin"><span class="muted">+ сон · стресс · калории за этот день</span></button>';
     wrap.innerHTML = '<div class="card"><p class="eyebrow">' + prettyDate(ds) + '</p>' +
       '<div class="statrow" style="margin-bottom:12px">' + stat('Упражнений', groupSets(sess).length) + stat('Подходов', sess.sets.length) + stat('Тоннаж', Math.round(sessionTonnage(sess)) + ' кг') + '</div>' +
-      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению — раскрыть подходы</p>' +
+      '<p class="note-inline" style="margin:0 0 10px">Тап по упражнению - раскрыть, ↑↓ - динамика</p>' +
       groupedHtml(sess, openMap) +
       chkRow +
       '<div class="hr"></div>' +
       '<button class="btn ghost slim" id="dd-add">+ Добавить упражнение или подход</button>' +
-      '<button class="btn ghost slim" id="dd-tpl" style="margin-top:10px">Сохранить как шаблон</button></div>';
+      '<button class="btn ghost slim" id="dd-tpl" style="margin-top:10px">Сохранить как шаблон</button>' +
+      '<button class="btn ghost slim" id="dd-del" style="margin-top:10px;color:var(--bad)">Удалить тренировку</button></div>';
 
-    $$('#hist-detail .exhead').forEach(function (b) { b.onclick = function () { var k = b.dataset.ex; openMap[k] = !openMap[k]; renderDayDetail(ds); }; });
-    $$('#hist-detail .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, function () { renderDayDetail(ds); }); }; });
+    bindGrouped('#hist-detail', sess, openMap, function () { renderDayDetail(ds); }, function () { renderDayDetail(ds); });
     $('#dd-checkin').onclick = function () { openCheckin(ds); };
     $('#dd-add').onclick = function () { startBackdated(ds); };
     $('#dd-tpl').onclick = function () { openSaveTemplate(sess.sets); };
+    $('#dd-del').onclick = function () { confirmDeleteWorkout(ds); };
+  }
+  function confirmDeleteWorkout(ds) {
+    openSheet('<p class="eyebrow">' + prettyDate(ds) + '</p><h2 style="margin-bottom:8px">Удалить тренировку?</h2>' +
+      '<p class="muted" style="margin:0 0 16px">Сессия этого дня со всеми подходами будет удалена. Отменить нельзя</p>' +
+      '<button class="btn" id="dw-yes" style="background:var(--bad);color:#fff">Удалить тренировку</button>' +
+      '<button class="btn ghost slim" id="dw-no" style="margin-top:10px">Отмена</button>');
+    $('#dw-yes').onclick = function () {
+      S.sessions = S.sessions.filter(function (s) { return s.date !== ds; });
+      save(); closeSheet(); toast('Тренировка удалена');
+      renderCalendar._sel = null; if ($('#screen-history').classList.contains('active')) renderCalendar(); else if ($('#screen-today').classList.contains('active')) renderToday();
+    };
+    $('#dw-no').onclick = closeSheet;
   }
 
   /* ---------- Forecast ---------- */
@@ -693,7 +890,7 @@
     hero.innerHTML =
       '<p class="eyebrow">' + SCEN_LABEL[p.scenario] + ' · прогноз на 12 недель</p>' +
       '<div class="corridor-num"><b class="mono">+' + g.low + '–' + g.high + '</b><span class="muted">кг мышц</span></div>' +
-      '<p class="muted" style="margin:2px 0 0">Если держать калораж ' + cal.low + '–' + cal.high + ' ккал/день и тренироваться по плану. Это коридор, а не обещание — уточняется по твоим логам</p>';
+      '<p class="muted" style="margin:2px 0 0">Если держать калораж ' + cal.low + '–' + cal.high + ' ккал/день и тренироваться по плану. Это коридор, а не обещание - уточняется по твоим логам</p>';
     box.appendChild(hero);
 
     var chart = el('div', 'card');
@@ -702,18 +899,19 @@
       '<span><i style="background:var(--accent)"></i>прогноз (коридор)</span>' +
       '<span><i style="background:var(--ink-2)"></i>факт (твой вес)</span>' +
       '<span><i style="background:var(--bad)"></i>если бросишь</span></div>' +
-      '<p class="note-inline">Линия «если бросишь» — оценка потери мышц без тренировок.' + (p.wrist ? (' Каркас (запястье/лодыжка) задаёт ширину коридора: у тебя ×' + g.frameFactor) : ' Каркас пока не указан — коридор по среднему') + '</p>';
+      '<p class="note-inline">Линия «если бросишь» - оценка потери мышц без тренировок.' + (p.wrist ? (' Каркас (запястье/лодыжка) задаёт ширину коридора: у тебя ×' + g.frameFactor) : ' Каркас пока не указан - коридор по среднему') + '</p>';
     box.appendChild(chart);
 
     var calCard = el('div', 'card');
-    calCard.innerHTML = '<p class="eyebrow">Калораж под цель</p>' +
+    calCard.innerHTML = '<p class="eyebrow">Калораж под цель <button type="button" class="info-i" id="cal-info">i</button></p>' +
       '<div class="statrow">' + stat('Поддержка', cal.tdee + '') + stat('Твоя цель', cal.low + '–' + cal.high) + '</div>' +
-      '<p class="note-inline">Оценка по Mifflin-St Jeor. Взвешивайся раз в 2 недели — приложение подстроит коридор под факт</p>';
+      '<p class="note-inline">Оценка по Mifflin-St Jeor. Взвешивайся раз в 2 недели - приложение подстроит коридор под факт</p>';
     box.appendChild(calCard);
+    $('#cal-info').onclick = function () { openCalorieInfo(p, cal); };
 
     if (!p.wrist) {
       var fr = el('div', 'card');
-      fr.innerHTML = '<p class="eyebrow">Каркас не указан</p><p class="muted" style="margin:0 0 12px">Коридор прогноза сейчас по среднему. Замерь запястье и лодыжку — и он подстроится под твой скелет</p>';
+      fr.innerHTML = '<p class="eyebrow">Каркас не указан</p><p class="muted" style="margin:0 0 12px">Коридор прогноза сейчас по среднему. Замерь запястье и лодыжку - и он подстроится под твой скелет</p>';
       var frb = el('button', 'btn ghost slim', 'Указать каркас');
       frb.onclick = openFrameSheet;
       fr.appendChild(frb);
@@ -725,7 +923,7 @@
   function openFrameSheet() {
     var p = S.profile;
     openSheet('<p class="eyebrow">Каркас</p><h2 style="margin-bottom:6px">Запястье и лодыжка</h2>' +
-      '<p class="muted" style="margin:0 0 6px">Кость почти без мышц и жира — она задаёт ширину прогноза</p>' +
+      '<p class="muted" style="margin:0 0 6px">Кость почти без мышц и жира - она задаёт ширину прогноза</p>' +
       '<p class="note-inline">Мерь сантиметром в самом узком месте</p>' +
       '<div class="grid2" style="margin-top:14px">' + numField('f_wrist', 'Запястье, см', p.wrist || 17) + numField('f_ankle', 'Лодыжка, см', p.ankle || 22) + '</div>' +
       '<button class="btn" id="fr-save">Сохранить</button>' +
@@ -826,22 +1024,22 @@
 
     var verdict, cls, why, action, dispName = escapeHtml(name);
     if (perWeek > 0.4) {
-      verdict = dispName + ' растёт — держи курс'; cls = 'good';
+      verdict = dispName + ' растёт - держи курс'; cls = 'good';
       why = 'Расчётный 1ПМ прибавил +' + delta + ' кг за ' + Math.round(weeksSpan) + ' нед (' + perWeek + ' кг/нед). Это в рамках нормального прогресса.';
       action = 'Ничего не меняй. Продолжай добавлять понемногу вес или повторы.';
     } else if (perWeek >= 0.05) {
       verdict = dispName + ' растёт медленно'; cls = 'warn';
       why = 'Прибавка всего +' + delta + ' кг за ' + Math.round(weeksSpan) + ' нед. Движение есть, но вялое.';
-      action = 'Проверь калораж и сон. Если цель — масса, скорее всего недобираешь по еде.';
+      action = 'Проверь калораж и сон. Если цель - масса, скорее всего недобираешь по еде.';
     } else {
       verdict = dispName + ' стоит на месте'; cls = 'bad';
       why = 'За ' + Math.round(weeksSpan) + ' нед расчётный 1ПМ почти не сдвинулся (' + (delta >= 0 ? '+' : '') + delta + ' кг). Это плато.';
       action = 'Смени схему повторов или дай упражнению неделю разгрузки, затем зайди заново.';
     }
     var extra = [];
-    if (avgSleep != null && avgSleep < 6.5) extra.push('сон в среднем ' + fmt(avgSleep) + ' ч — маловато для восстановления');
+    if (avgSleep != null && avgSleep < 6.5) extra.push('сон в среднем ' + fmt(avgSleep) + ' ч - маловато для восстановления');
     if (avgStress != null && avgStress >= 7) extra.push('высокий стресс (' + fmt(avgStress) + '/10) бьёт по прогрессу');
-    if (reds >= 2) extra.push('последние подходы всё чаще на «красный» — работаешь на пределе');
+    if (reds >= 2) extra.push('последние подходы всё чаще на «красный» - работаешь на пределе');
     if (extra.length && cls !== 'good') why += ' Вероятная причина: ' + extra.join('; ') + '.';
 
     var colorStrip = recentSets.slice(-14).map(function (x) {
@@ -853,7 +1051,7 @@
       '<div class="card">' +
       '<span class="pill ' + cls + '">' + (cls === 'good' ? 'прогресс' : cls === 'warn' ? 'вялый рост' : 'плато') + '</span>' +
       '<div class="verdict" style="margin-top:12px"><h3>' + verdict + '</h3><p class="muted" style="margin:0">' + why + '</p></div>' +
-      '<div class="evidence"><div class="lbl">Улики — расчётный 1ПМ <button type="button" class="info-i" id="dg-info">i</button></div>' +
+      '<div class="evidence"><div class="lbl">Улики - расчётный 1ПМ <button type="button" class="info-i" id="dg-info">i</button></div>' +
       '<div class="mono">' + first.e1rm + ' кг → ' + last.e1rm + ' кг за ' + Math.round(weeksSpan) + ' нед</div></div>' +
       (colorStrip ? '<div class="evidence"><div class="lbl">Как давались подходы (свежие → )</div><div class="colorstrip">' + colorStrip + '</div></div>' : '') +
       (recentChecks.length ? '<div class="evidence"><div class="lbl">Образ жизни (7 дней)</div><div class="mono">сон ' + (avgSleep != null ? fmt(avgSleep) + ' ч' : '—') + ' · стресс ' + (avgStress != null ? fmt(avgStress) + '/10' : '—') + '</div></div>' : '') +
@@ -896,6 +1094,128 @@
       if (w % 2 === 0) S.weighins.push({ date: day, weight: E.round(p.weight + w * 0.15, 1), demo: true });
     }
     save();
+  }
+
+  /* ---------- #12 статистика упражнения ---------- */
+  var STATM = [
+    { k: 'e1rm', label: 'Расч. 1ПМ', unit: 'кг' },
+    { k: 'vol', label: 'Объём', unit: 'кг' },
+    { k: 'max', label: 'Макс вес', unit: 'кг' },
+    { k: 'reps', label: 'Повторов', unit: '' },
+    { k: 'sets', label: 'Подходов', unit: '' }
+  ];
+  var exStatsMetric = 'e1rm';
+  function exerciseSeries(name) {
+    return S.sessions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).map(function (s) {
+      var ss = s.sets.filter(function (x) { return x.exercise === name; });
+      if (!ss.length) return null;
+      var working = ss.filter(isWorking);
+      var vol = ss.reduce(function (a, x) { return a + setTonnage(x); }, 0);
+      var mx = working.reduce(function (a, x) { return Math.max(a, effWeight(x)); }, 0);
+      var reps = ss.reduce(function (a, x) { return a + (x.reps > 0 ? x.reps : 0); }, 0);
+      return { date: s.date, e1rm: bestE1rmOf(ss), vol: E.round(vol, 0), max: mx || null, reps: reps, sets: ss.length };
+    }).filter(Boolean);
+  }
+  function statValue(pt, k) { return k === 'e1rm' ? pt.e1rm : k === 'vol' ? pt.vol : k === 'max' ? pt.max : k === 'reps' ? pt.reps : pt.sets; }
+  function openExerciseStats(name) { exStatsMetric = 'e1rm'; renderExStats(name); }
+  function renderExStats(name) {
+    var series = exerciseSeries(name);
+    var m = STATM.filter(function (x) { return x.k === exStatsMetric; })[0];
+    var last = series.length ? series[series.length - 1] : null;
+    var cur = last ? statValue(last, exStatsMetric) : null;
+    openSheet('<p class="eyebrow">' + escapeHtml(name) + ' · ' + exCategory(name) + '</p><h2 style="margin-bottom:12px">Статистика упражнения</h2>' +
+      '<div class="chips" id="xs-chips">' + STATM.map(function (x) { return '<button class="chip" data-m="' + x.k + '" aria-pressed="' + (x.k === exStatsMetric) + '">' + x.label + '</button>'; }).join('') + '</div>' +
+      (series.length ? '<div class="corridor-num" style="margin-top:14px"><b class="mono">' + (cur != null ? cur : '—') + '</b><span class="muted">' + m.label.toLowerCase() + (m.unit ? ', ' + m.unit : '') + ' - последняя тренировка</span></div>' : '<p class="muted" style="margin-top:12px">Пока нет данных по этому упражнению</p>') +
+      (series.length >= 2 ? '<canvas id="xs-canvas" width="920" height="440"></canvas><p class="note-inline">По датам тренировок с этим упражнением</p>' : (series.length === 1 ? '<p class="note-inline">Нужна ещё одна тренировка для графика</p>' : '')) +
+      '<button class="btn ghost slim" id="xs-close" style="margin-top:14px">Закрыть</button>');
+    $$('#xs-chips .chip').forEach(function (b) { b.onclick = function () { exStatsMetric = b.dataset.m; renderExStats(name); }; });
+    $('#xs-close').onclick = closeSheet;
+    if (series.length >= 2) drawStats($('#xs-canvas'), series, exStatsMetric);
+  }
+  function drawStats(cv, series, k) {
+    var ctx = cv.getContext('2d'), W = cv.width, H = cv.height, padL = 56, padR = 20, padT = 20, padB = 42;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.clearRect(0, 0, W, H);
+    var vals = series.map(function (p) { return statValue(p, k); }).map(function (v) { return v == null ? 0 : v; });
+    var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+    if (mn === mx) { mn = mn - 1; mx = mx + 1; }
+    var pad = (mx - mn) * 0.15; mn -= pad; mx += pad;
+    function X(i) { return series.length === 1 ? padL + plotW / 2 : padL + plotW * i / (series.length - 1); }
+    function Y(v) { return padT + plotH * (mx - v) / (mx - mn); }
+    ctx.font = '18px -apple-system, system-ui, sans-serif';
+    ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1;
+    for (var g = 0; g <= 4; g++) { var yy = padT + plotH * g / 4; var vv = E.round(mx - (mx - mn) * g / 4, 1); ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W - padR, yy); ctx.stroke(); ctx.textAlign = 'right'; ctx.fillText(vv + '', padL - 8, yy + 5); }
+    ctx.textAlign = 'center';
+    series.forEach(function (p, i) { if (i === 0 || i === series.length - 1 || series.length <= 6) ctx.fillText(prettyDate(p.date), X(i), H - 14); });
+    ctx.strokeStyle = '#cdff3d'; ctx.lineWidth = 3; ctx.beginPath();
+    series.forEach(function (p, i) { var v = statValue(p, k); (i === 0 ? ctx.moveTo : ctx.lineTo).call(ctx, X(i), Y(v == null ? mn : v)); });
+    ctx.stroke();
+    ctx.fillStyle = '#cdff3d';
+    series.forEach(function (p, i) { var v = statValue(p, k); if (v != null) { ctx.beginPath(); ctx.arc(X(i), Y(v), 4, 0, 7); ctx.fill(); } });
+  }
+
+  /* ---------- #13 объяснение калоража (сверено с научной базой) ---------- */
+  var ACT_LABEL = { sedentary: 'сидячая ×1.2', light: 'лёгкая ×1.375', moderate: 'средняя ×1.55', high: 'высокая ×1.725' };
+  var SCEN_ADJ = { mass: '+10…15%', lean: '+5…10%', recomp: '±0…2%', cut: '−20…−15%' };
+  function openCalorieInfo(p, cal) {
+    var bmr = Math.round(E.bmr(p));
+    openSheet('<p class="eyebrow">Как считаем калораж</p><h2 style="margin-bottom:10px">Формула, не магия</h2>' +
+      '<div class="evidence"><div class="lbl">1. Базовый обмен (Mifflin-St Jeor)</div><div class="mono">10×' + p.weight + ' + 6.25×' + p.height + ' − 5×' + p.age + (p.sex === 'f' ? ' − 161' : ' + 5') + ' = ' + bmr + ' ккал</div></div>' +
+      '<div class="evidence"><div class="lbl">2. Расход (TDEE) = BMR × активность</div><div class="mono">' + bmr + ' × ' + (ACT_LABEL[p.activity] || 'средняя ×1.55') + ' = ' + cal.tdee + ' ккал</div></div>' +
+      '<div class="evidence"><div class="lbl">3. Поправка на цель «' + SCEN_LABEL[p.scenario] + '»</div><div class="mono">' + cal.tdee + ' ' + (SCEN_ADJ[p.scenario] || '±0') + ' → ' + cal.low + '–' + cal.high + ' ккал</div></div>' +
+      '<p class="note-inline">Источник: Mifflin MD, St Jeor ST et al., 1990 (стандарт TDEE). Это оценка - уточняется по факту веса раз в 2 недели</p>' +
+      '<button class="btn" id="ci-ok" style="margin-top:14px">Понятно</button>');
+    $('#ci-ok').onclick = closeSheet;
+  }
+
+  /* ---------- #14 экспорт/импорт, #17 поддержка ---------- */
+  function exportData() {
+    try {
+      var blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a'); a.href = url; a.download = 'fittracker-backup-' + todayStr() + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      toast('Файл выгружен');
+    } catch (e) { toast('Экспорт не удался'); }
+  }
+  function importDataFile(file) {
+    if (!file) return;
+    var r = new FileReader();
+    r.onload = function () {
+      var obj; try { obj = JSON.parse(r.result); } catch (e) { toast('Файл не читается'); return; }
+      if (!obj || typeof obj !== 'object' || !('sessions' in obj)) { toast('Не похоже на бэкап трекера'); return; }
+      openImportConfirm(obj);
+    };
+    r.readAsText(file);
+  }
+  function openImportConfirm(obj) {
+    var n = (obj.sessions || []).length;
+    openSheet('<p class="eyebrow">Импорт данных</p><h2 style="margin-bottom:8px">Заменить всё этим файлом?</h2>' +
+      '<p class="muted" style="margin:0 0 16px">В файле тренировок: ' + n + '. Текущие данные на этом устройстве будут перезаписаны без возврата</p>' +
+      '<button class="btn" id="im-yes">Заменить данные</button><button class="btn ghost slim" id="im-no" style="margin-top:10px">Отмена</button>');
+    $('#im-yes').onclick = function () { S = migrate(obj); save(); closeSheet(); toast('Данные импортированы'); boot(); go('today'); };
+    $('#im-no').onclick = closeSheet;
+  }
+  function openSupport() {
+    var body = encodeURIComponent('Что делал:\n\nЧто ожидал:\n\nЧто произошло:\n\n---\nверсия: раунд 6');
+    openSheet('<p class="eyebrow">Поддержка</p><h2 style="margin-bottom:10px">Баг или идея?</h2>' +
+      '<p class="muted" style="margin:0 0 16px">Откроется письмо автору с шаблоном. Напиши, что делал, что ожидал и что случилось</p>' +
+      '<a class="btn" id="sup-mail" href="mailto:vladislaavkozlov@gmail.com?subject=' + encodeURIComponent('Фит-трекер: баг/идея') + '&body=' + body + '" style="text-decoration:none;display:flex;align-items:center;justify-content:center">Написать автору</a>' +
+      '<button class="btn ghost slim" id="sup-close" style="margin-top:10px">Закрыть</button>');
+    $('#sup-close').onclick = closeSheet;
+  }
+
+  /* ---------- #11 «пора на тренировку» без спама ---------- */
+  function overdueNote() {
+    var dates = uniq(S.sessions.filter(function (s) { return !s.demo; }).map(function (s) { return s.date; })).sort();
+    if (dates.length < 3) return null;                       // мало данных - молчим
+    var gaps = []; for (var i = 1; i < dates.length; i++) gaps.push(daysBetween(dates[i - 1], dates[i]));
+    gaps.sort(function (a, b) { return a - b; });
+    var med = gaps[Math.floor(gaps.length / 2)] || 3;
+    var since = daysBetween(dates[dates.length - 1], todayStr());
+    if (since > med && since >= 2) return 'С последней тренировки ' + since + ' дн. - обычно ты тренируешься чаще (раз в ~' + med + ')';
+    return null;
   }
 
   /* ---------- misc ---------- */
