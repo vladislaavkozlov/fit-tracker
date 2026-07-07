@@ -187,7 +187,8 @@ canvas{width:100%;height:auto;display:block;border-radius:12px}
 .sheet-bg.show{display:flex}
 .sheet{width:100%;max-width:520px;background:var(--panel);border-radius:24px 24px 0 0;
   border-top:1px solid var(--line-2);padding:22px 18px calc(22px + env(safe-area-inset-bottom));
-  animation:up .26s ease}
+  animation:up .26s ease;max-height:88vh;max-height:88dvh;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 @keyframes up{from{transform:translateY(100%)}to{transform:none}}
 .sheet h2{font-size:20px;margin-bottom:4px}
 .slider{display:flex;align-items:center;gap:14px}
@@ -265,7 +266,13 @@ canvas{width:100%;height:auto;display:block;border-radius:12px}
 /* ===== v6-полировка (дизайн-окно, 06.07.2026) ===== */
 /* иконки групп мышц (инлайн-SVG из assets/muscles, красятся через currentColor) */
 .micon{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
-.catfilter .chip{display:inline-flex;align-items:center;gap:6px}
+/* фильтры категорий - табы-пилюли, визуально НЕ упражнения: один ряд с гор. скроллом */
+.catfilter{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 2px 6px;margin:0 -2px 6px}
+.catfilter::-webkit-scrollbar{display:none}
+.catfilter .chip{display:inline-flex;align-items:center;gap:6px;flex:none;
+  padding:8px 14px;border-radius:999px;font-size:13px;font-weight:600;color:var(--ink-2)}
+.catfilter .chip[aria-pressed="true"]{color:var(--accent-ink)}
+.catfilter .chip .micon{width:14px;height:14px}
 .tag{display:inline-flex;align-items:center;gap:6px}
 .tag .micon{width:14px;height:14px}
 .tag-main{color:var(--accent);border-color:rgba(205,255,61,.35)}

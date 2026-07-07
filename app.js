@@ -48,7 +48,9 @@
     'Выпады': { cat: 'ноги', m: ['квадрицепс', 'ягодицы'] },
     'Жим стоя': { cat: 'плечи', m: ['дельты', 'трицепс'] },
     'Сгибания на бицепс': { cat: 'руки', m: ['бицепс'] },
-    'Разгибания на трицепс': { cat: 'руки', m: ['трицепс'] }
+    'Разгибания на трицепс': { cat: 'руки', m: ['трицепс'] },
+    'Скручивания': { cat: 'пресс', m: ['пресс'] },
+    'Подъём ног в висе': { cat: 'пресс', m: ['пресс'] }
   };
   var CATEGORIES = ['грудь', 'спина', 'ноги', 'плечи', 'руки', 'пресс'];
   var EXERCISES = Object.keys(CATALOG);
@@ -103,7 +105,7 @@
     if (eq === 'bodyweight') return 'свой вес' + (+x.weight > 0 ? (' + ' + x.weight + ' кг') : '');
     return x.weight + ' кг';
   }
-  function guessEquip(n) { n = (n || '').toLowerCase(); if (/гантел/.test(n)) return 'dumbbell'; if (/подтяг|отжим|брус|планк|берпи|пресс/.test(n)) return 'bodyweight'; if (/тренаж|блок|кроссовер|машин/.test(n)) return 'machine'; return 'barbell'; }
+  function guessEquip(n) { n = (n || '').toLowerCase(); if (/гантел/.test(n)) return 'dumbbell'; if (/подтяг|отжим|брус|планк|берпи|пресс|скруч|подъ[её]м ног/.test(n)) return 'bodyweight'; if (/тренаж|блок|кроссовер|машин/.test(n)) return 'machine'; return 'barbell'; }
 
   /* ---------- router ---------- */
   function go(id) {
@@ -122,7 +124,7 @@
   }
 
   /* ---------- generic sheet ---------- */
-  function openSheet(html) { $('#sheet').innerHTML = html; $('#sheet-bg').classList.add('show'); }
+  function openSheet(html) { var sh = $('#sheet'); sh.innerHTML = html; sh.scrollTop = 0; $('#sheet-bg').classList.add('show'); }
   function closeSheet() { $('#sheet-bg').classList.remove('show'); }
 
   /* ---------- reusable stepper (кнопки + прямой ввод) + rpe ---------- */
@@ -597,11 +599,14 @@
   }
   function openExercisePicker(onPick, catFilter) {
     var recent = recentExercises(6);
-    var rest = allKnownExercises().filter(function (n) { return recent.indexOf(n) < 0; });
+    var showRecent = recent.length && (!catFilter || catFilter === 'все');       // при активном фильтре блок «Недавние» скрыт
+    var rest = allKnownExercises().filter(function (n) { return !showRecent || recent.indexOf(n) < 0; });  // …и недавние НЕ исключаем из списка
     if (catFilter && catFilter !== 'все') rest = rest.filter(function (n) { return exCategory(n) === catFilter; });
-    var catChips = '<div class="chips catfilter">' + ['все'].concat(CATEGORIES).map(function (c) { return '<button class="chip" data-cat="' + c + '" aria-pressed="' + ((catFilter || 'все') === c) + '">' + (c === 'все' ? '' : muscleIcon(c)) + c + '</button>'; }).join('') + '</div>';
+    var cats = ['все'].concat(CATEGORIES);
+    if (allKnownExercises().some(function (n) { return exCategory(n) === 'другое'; })) cats.push('другое');  // свои упражнения без категории
+    var catChips = '<div class="chips catfilter">' + cats.map(function (c) { return '<button class="chip" data-cat="' + c + '" aria-pressed="' + ((catFilter || 'все') === c) + '">' + (c === 'все' ? '' : muscleIcon(c)) + c + '</button>'; }).join('') + '</div>';
     var html = '<p class="eyebrow">Упражнение</p><h2 style="margin-bottom:12px">Что делаешь?</h2>';
-    if (recent.length && (!catFilter || catFilter === 'все')) html += '<div class="lbl2">Недавние</div><div class="picklist">' + recent.map(pickBtn).join('') + '</div>';
+    if (showRecent) html += '<div class="lbl2">Недавние</div><div class="picklist">' + recent.map(pickBtn).join('') + '</div>';
     html += '<div class="lbl2">Все упражнения</div>' + catChips +
       '<div class="picklist">' + (rest.length ? rest.map(pickBtn).join('') : '<p class="muted">Нет упражнений в этой категории</p>') + '</div>' +
       '<button class="btn ghost slim" id="pk-past" style="margin-top:10px">Из прошлой тренировки…</button>' +
