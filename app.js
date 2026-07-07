@@ -35,6 +35,11 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
 
   var SCEN_LABEL = { mass: 'Массонабор', lean: 'Сухой набор', recomp: 'Рекомпозиция', cut: 'Похудение' };
+  // опции профиля - один источник для онбординга и редактора «Цель и мои данные»
+  var SCEN_OPTS = [['mass', 'Массонабор'], ['lean', 'Сухой набор'], ['recomp', 'Рекомпозиция'], ['cut', 'Похудение']];
+  var SEX_OPTS = [['m', 'Мужской'], ['f', 'Женский']];
+  var EXP_OPTS = [['beginner', 'До 1 года'], ['intermediate', '1–3 года'], ['advanced', '3+ года']];
+  var ACT_OPTS = [['sedentary', 'Сидячая'], ['light', 'Лёгкая'], ['moderate', 'Средняя'], ['high', 'Высокая']];
   // каталог: категория + задействованные мышцы. Пользовательские упражнения → категория из S.exCat или «другое»
   var CATALOG = {
     'Жим лёжа': { cat: 'грудь', m: ['грудь', 'трицепс', 'передняя дельта'] },
@@ -171,17 +176,17 @@
         '<p class="eyebrow">Шаг 1 из 2 · цель</p>' +
         '<h2 style="font-size:26px;margin-bottom:6px">Чего хочешь добиться?</h2>' +
         '<p class="muted" style="margin:0 0 18px">От цели зависит калораж и прогноз</p>' +
-        chips('scenario', [['mass', 'Массонабор'], ['lean', 'Сухой набор'], ['recomp', 'Рекомпозиция'], ['cut', 'Похудение']], draft.scenario) +
+        chips('scenario', SCEN_OPTS, draft.scenario) +
         '<div class="field" style="margin-top:20px"><label>Пол</label>' +
-        chips('sex', [['m', 'Мужской'], ['f', 'Женский']], draft.sex) + '</div>' +
+        chips('sex', SEX_OPTS, draft.sex) + '</div>' +
         '<div class="grid2">' +
         numField('height', 'Рост, см', draft.height || 178) +
         numField('weight', 'Вес, кг', draft.weight || 80) +
         numField('age', 'Возраст', draft.age || 30) +
-        selField('activity', 'Активность вне зала', [['sedentary', 'Сидячая'], ['light', 'Лёгкая'], ['moderate', 'Средняя'], ['high', 'Высокая']], draft.activity) +
+        selField('activity', 'Активность вне зала', ACT_OPTS, draft.activity) +
         '</div>' +
         '<div class="field"><label>Стаж в зале</label>' +
-        chips('experience', [['beginner', 'До 1 года'], ['intermediate', '1–3 года'], ['advanced', '3+ года']], draft.experience) + '</div>' +
+        chips('experience', EXP_OPTS, draft.experience) + '</div>' +
         '<button class="btn" id="ob-next">Дальше →</button>';
       bindChips(wrap, draft);
       $('#ob-next').onclick = function () {
@@ -327,7 +332,11 @@
     var settings = el('div', 'card');
     settings.innerHTML = '<p class="eyebrow">Данные и поддержка</p>' +
       '<p class="muted" style="margin:0 0 12px">Бэкап и перенос между устройствами - файлом. Всё хранится только на телефоне</p>';
+    var prof = el('button', 'btn ghost slim', 'Цель и мои данные');
+    prof.id = 'pf-profile';
+    prof.onclick = openProfileSheet;
     var exp = el('button', 'btn ghost slim', 'Экспорт истории (файл)');
+    exp.style.marginTop = '10px';
     exp.onclick = exportData;
     var imp = el('button', 'btn ghost slim', 'Импорт из файла');
     imp.style.marginTop = '10px';
@@ -338,7 +347,7 @@
     var fileInput = el('input');
     fileInput.type = 'file'; fileInput.id = 'import-file'; fileInput.accept = 'application/json,.json'; fileInput.style.display = 'none';
     fileInput.onchange = function () { importDataFile(fileInput.files && fileInput.files[0]); fileInput.value = ''; };
-    settings.appendChild(exp); settings.appendChild(imp); settings.appendChild(sup); settings.appendChild(fileInput);
+    settings.appendChild(prof); settings.appendChild(exp); settings.appendChild(imp); settings.appendChild(sup); settings.appendChild(fileInput);
     box.appendChild(settings);
 
     // Поддержать проект (#7) - тихая постоянная точка входа, без бейджей
@@ -929,8 +938,10 @@
     hero.innerHTML =
       '<p class="eyebrow">' + SCEN_LABEL[p.scenario] + ' · прогноз на 12 недель</p>' +
       '<div class="corridor-num"><b class="mono">+' + g.low + '–' + g.high + '</b><span class="muted">кг мышц</span></div>' +
-      '<p class="muted" style="margin:2px 0 0">Если держать калораж ' + cal.low + '–' + cal.high + ' ккал/день и тренироваться по плану. Это коридор, а не обещание - уточняется по твоим логам</p>';
+      '<p class="muted" style="margin:2px 0 0">Если держать калораж ' + cal.low + '–' + cal.high + ' ккал/день и тренироваться по плану. Это коридор, а не обещание - уточняется по твоим логам</p>' +
+      '<button class="btn ghost slim" id="fc-edit" style="margin-top:14px">Изменить цель и данные</button>';
     box.appendChild(hero);
+    $('#fc-edit').onclick = openProfileSheet;
 
     var chart = el('div', 'card');
     chart.innerHTML = '<p class="eyebrow">Траектория веса</p><canvas id="fc-canvas" width="960" height="560"></canvas>' +
@@ -972,6 +983,48 @@
       save(); closeSheet(); toast('Каркас учтён'); renderForecast();
     };
     $('#fr-cancel').onclick = closeSheet;
+  }
+  // редактор профиля: цель и исходные данные меняются в любой момент, прогноз/калораж пересчитываются сразу
+  function openProfileSheet() {
+    var p = S.profile;
+    var pd = { scenario: p.scenario, sex: p.sex, experience: p.experience, activity: p.activity };
+    openSheet('<p class="eyebrow">Профиль</p><h2 style="margin-bottom:6px">Цель и мои данные</h2>' +
+      '<p class="muted" style="margin:0 0 14px">Прогноз и калораж пересчитаются сразу после сохранения</p>' +
+      '<div class="field"><label>Цель</label>' + chips('scenario', SCEN_OPTS, pd.scenario) + '</div>' +
+      '<div class="field"><label>Пол</label>' + chips('sex', SEX_OPTS, pd.sex) + '</div>' +
+      '<div class="grid2">' +
+      numField('height', 'Рост, см', p.height || '') +
+      numField('weight', 'Вес на старте, кг', p.weight || '') +
+      numField('age', 'Возраст', p.age || '') +
+      selField('activity', 'Активность вне зала', ACT_OPTS, pd.activity) +
+      '</div>' +
+      '<div class="field"><label>Стаж в зале</label>' + chips('experience', EXP_OPTS, pd.experience) + '</div>' +
+      '<div class="grid2">' +
+      numField('wrist', 'Запястье, см', p.wrist || '') +
+      numField('ankle', 'Лодыжка, см', p.ankle || '') +
+      '</div>' +
+      '<p class="note-inline">Текущий вес меняй взвешиваниями в чек-ине - тут только стартовая точка</p>' +
+      '<button class="btn" id="pf-save" style="margin-top:12px">Сохранить</button>' +
+      '<button class="btn ghost slim" id="pf-cancel" style="margin-top:10px">Отмена</button>');
+    bindChips($('#sheet'), pd);
+    $('#pf-save').onclick = function () {
+      collectNums($('#sheet'), pd);
+      var h = +pd.height, w = +pd.weight, a = +pd.age;
+      if (!(h > 0) || !(w > 0) || !(a > 0)) { toast('Рост, вес и возраст - числа больше нуля'); return; }
+      p.scenario = pd.scenario; p.sex = pd.sex; p.experience = pd.experience; p.activity = pd.activity;
+      p.height = h; p.age = a;
+      if (w !== p.weight) {
+        p.weight = w;
+        var first = S.weighins && S.weighins[0];
+        if (first && first.date === p.createdAt) first.weight = w;   // стартовое взвешивание из онбординга едет вместе со стартовым весом
+      }
+      var wr = +pd.wrist, an = +pd.ankle;
+      p.wrist = wr > 0 ? wr : null; p.ankle = an > 0 ? an : null;
+      save(); closeSheet(); toast('Профиль обновлён');
+      var act = $$('.screen').filter(function (s) { return s.classList.contains('active'); })[0];
+      if (act) render(act.id.replace('screen-', ''));
+    };
+    $('#pf-cancel').onclick = closeSheet;
   }
   function drawForecast(cv, p, weeks) {
     var ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
