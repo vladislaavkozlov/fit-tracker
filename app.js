@@ -402,6 +402,7 @@
     var date = activeDate();
     var sess = sessionOf(date);
     var hasSets = sess && sess.sets.length;
+    var hasOtherDays = S.sessions.some(function (s) { return s.date !== date && s.sets.length; });
 
     var banner = '';
     if (logDate && logDate !== todayStr()) banner += '<div class="backdate">Запись за ' + prettyDate(logDate) + '<button type="button" id="lg-exit">закрыть</button></div>';
@@ -412,8 +413,9 @@
     box.innerHTML = banner +
       (hasSets
         ? '<div id="lg-sets"></div>'
-        : '<div class="card"><p class="muted" style="margin:0 0 12px">Пустая тренировка. Добавь первый подход' + (S.templates.length ? ' или начни по готовому шаблону' : '') + '</p>' +
-          (S.templates.length ? '<button class="btn" id="lg-tpl-start">Начать по шаблону</button>' : '') + '</div>') +
+        : '<div class="card"><p class="muted" style="margin:0 0 12px">Пустая тренировка. Добавь первый подход' + (S.templates.length ? ', начни по готовому шаблону' : '') + (hasOtherDays ? ' или скопируй прошлую тренировку' : '') + '</p>' +
+          (S.templates.length ? '<button class="btn" id="lg-tpl-start">Начать по шаблону</button>' : '') +
+          (hasOtherDays ? '<button class="btn ghost slim" id="lg-copy-day" style="margin-top:10px">Скопировать с другого дня</button>' : '') + '</div>') +
       '<button class="btn" id="lg-add" style="margin-top:8px">+ Добавить подход</button>' +
       '<div class="hr"></div>' +
       (hasSets ? '<button class="btn ghost slim" id="lg-tpl-save">Сохранить как шаблон</button>' : '') +
@@ -424,6 +426,7 @@
     $$('#lg-plan .pick').forEach(function (b) { b.onclick = function () { var it = remaining[+b.dataset.pi]; logState.exercise = it.exercise; logState.equipment = it.equipment || S.equipment[it.exercise] || guessEquip(it.exercise); if (it.weight) logState.weight = it.weight; if (it.reps) logState.reps = it.reps; logState._pin = true; openAddSet(date); }; });
     $('#lg-add').onclick = function () { openAddSet(date); };
     if ($('#lg-tpl-start')) $('#lg-tpl-start').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
+    if ($('#lg-copy-day')) $('#lg-copy-day').onclick = function () { openCopyDay(date); };
     if ($('#lg-tpl-use')) $('#lg-tpl-use').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
     if ($('#lg-tpl-save')) $('#lg-tpl-save').onclick = function () { openSaveTemplate(sessionOf(date).sets); };
     $('#lg-finish').onclick = function () { var back = logDate ? 'history' : 'today'; var finished = sessionOf(date); logDate = null; toast('Тренировка сохранена'); go(back); maybeDonatePrompt(finished); };
@@ -716,11 +719,35 @@
     $$('#sheet .tpl-del').forEach(function (b) { b.onclick = function () { S.templates.splice(+b.dataset.i, 1); save(); chooseTemplate(cb); }; });
     $('#tpl-cancel').onclick = closeSheet;
   }
-  function applyTemplateToDate(t, date) {
-    var plan = { date: date, items: t.items.map(function (it) { return { exercise: it.exercise, equipment: it.equipment, weight: it.weight, reps: it.reps }; }) };
+  function applyPlanToDate(items, date, msg) {
+    var plan = { date: date, items: items.map(function (it) { return { exercise: it.exercise, equipment: it.equipment, weight: it.weight, reps: it.reps }; }) };
     S.plans = S.plans.filter(function (p) { return p.date !== date; });
-    S.plans.push(plan); save(); closeSheet(); toast('План по шаблону готов');
+    S.plans.push(plan); save(); closeSheet(); toast(msg);
     if (date === activeDate() && $('#screen-logger').classList.contains('active')) renderLogger(); else renderCalendar();
+  }
+  function applyTemplateToDate(t, date) { applyPlanToDate(t.items, date, 'План по шаблону готов'); }
+
+  /* ---------- копирование тренировки с другого дня (как план, НЕ как факт) ---------- */
+  function openCopyDay(date) {
+    var days = S.sessions.filter(function (s) { return s.date !== date && s.sets.length; })
+      .sort(function (a, b) { return a.date < b.date ? 1 : -1; }).slice(0, 14);
+    if (!days.length) { toast('Пока нет тренировок для копирования'); return; }
+    openSheet('<p class="eyebrow">Копирование</p><h2 style="margin-bottom:12px">С какого дня повторить?</h2>' +
+      days.map(function (s, i) {
+        var names = groupSets(s).map(function (g) { return escapeHtml(g.exercise); }).join(', ');
+        return '<div class="plan-item"><button type="button" class="tpl-pick copy-pick" data-i="' + i + '"><b>' + prettyDate(s.date) + '</b><div class="muted" style="font-size:13px">' + s.sets.length + ' подходов · ' + names + '</div></button></div>';
+      }).join('') +
+      '<p class="note-inline" style="margin:10px 0 0">Упражнения и веса встанут планом на ' + (date === todayStr() ? 'сегодня' : prettyDate(date)) + ' - каждый подход записываешь сам</p>' +
+      '<button class="btn ghost slim" id="copy-cancel" style="margin-top:12px">Отмена</button>');
+    $$('#sheet .copy-pick').forEach(function (b) {
+      b.onclick = function () {
+        var src = days[+b.dataset.i];
+        var items = [], seen = {};
+        src.sets.forEach(function (x) { if (!seen[x.exercise]) { seen[x.exercise] = 1; items.push({ exercise: x.exercise, equipment: setEquip(x), weight: x.weight, reps: x.reps }); } });
+        applyPlanToDate(items, date, 'Скопировано: ' + prettyDate(src.date));
+      };
+    });
+    $('#copy-cancel').onclick = closeSheet;
   }
 
   /* ---------- info sheet: 1ПМ ---------- */
