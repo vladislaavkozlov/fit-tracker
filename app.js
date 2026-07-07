@@ -13,7 +13,7 @@
   /* ---------- storage + миграция (логи не терять) ---------- */
   var KEY = 'fittracker.v1';
   var S = load();
-  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {}, plans: [], templates: [], lastWeight: {}, exCat: {} }; }
+  function blank() { return { profile: null, sessions: [], checkins: [], weighins: [], equipment: {}, plans: [], templates: [], lastWeight: {}, exCat: {}, donate: { lastPromptAt: null, snoozeUntil: null } }; }
   function migrate(s) {
     s = s || blank();
     s.profile = s.profile || null;
@@ -25,6 +25,7 @@
     s.templates = s.templates || [];                          // шаблоны тренировок
     s.lastWeight = s.lastWeight || {};                        // память последнего веса/повторов за упражнением
     s.exCat = s.exCat || {};                                  // категория для пользовательских упражнений
+    s.donate = s.donate || { lastPromptAt: null, snoozeUntil: null };  // #7 состояние показов доната
     s.sessions.forEach(function (ss) {
       (ss.sets || []).forEach(function (x) { if (!x.equipment) x.equipment = 'barbell'; });   // старые логи = штанга
     });
@@ -337,6 +338,12 @@
     fileInput.onchange = function () { importDataFile(fileInput.files && fileInput.files[0]); fileInput.value = ''; };
     settings.appendChild(exp); settings.appendChild(imp); settings.appendChild(sup); settings.appendChild(fileInput);
     box.appendChild(settings);
+
+    // Поддержать проект (#7) - тихая постоянная точка входа, без бейджей
+    var donate = el('button', 'btn ghost slim', 'Поддержать проект');
+    donate.id = 'pf-donate'; donate.style.marginTop = '12px';
+    donate.onclick = openDonateSheet;
+    box.appendChild(donate);
   }
   function stat(k, v) { return '<div class="stat"><div class="k">' + k + '</div><div class="v mono">' + v + '</div></div>'; }
 
@@ -419,7 +426,7 @@
     if ($('#lg-tpl-start')) $('#lg-tpl-start').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
     if ($('#lg-tpl-use')) $('#lg-tpl-use').onclick = function () { chooseTemplate(function (t) { applyTemplateToDate(t, date); }); };
     if ($('#lg-tpl-save')) $('#lg-tpl-save').onclick = function () { openSaveTemplate(sessionOf(date).sets); };
-    $('#lg-finish').onclick = function () { var back = logDate ? 'history' : 'today'; logDate = null; toast('Тренировка сохранена'); go(back); };
+    $('#lg-finish').onclick = function () { var back = logDate ? 'history' : 'today'; var finished = sessionOf(date); logDate = null; toast('Тренировка сохранена'); go(back); maybeDonatePrompt(finished); };
     renderSetList();
   }
   // шторка добавления подхода (#2): список виден на экране, форма всплывает только тут
@@ -1216,6 +1223,37 @@
     var since = daysBetween(dates[dates.length - 1], todayStr());
     if (since > med && since >= 2) return 'С последней тренировки ' + since + ' дн. - обычно ты тренируешься чаще (раз в ~' + med + ')';
     return null;
+  }
+
+  /* ---------- #7 донат: строго по правилам показа дизайнера ---------- */
+  var DONATE_URL = 'https://messenger.online.sberbank.ru/sl/giwWlGUcAd0qeO1qu';
+  function addDays(iso, n) { var x = new Date(iso); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
+  function completedSessions() { return S.sessions.filter(function (s) { return !s.demo && (s.sets || []).some(isWorking); }); }
+  function isNewBestSession(sess) {                            // новый лучший расчётный 1ПМ против всех прошлых тренировок
+    var b = bestE1rmOf(sess.sets); if (b == null) return false;
+    var prev = null;
+    S.sessions.forEach(function (s) { if (s === sess || s.demo) return; var v = bestE1rmOf(s.sets); if (v != null && (prev == null || v > prev)) prev = v; });
+    return prev == null || b > prev;
+  }
+  function maybeDonatePrompt(sess) {                           // вызывается ТОЛЬКО после завершения тренировки (не при запуске/в тренировке/онбординге)
+    if (!sess) return;
+    var count = completedSessions().length;
+    if (count < 5) return;                                     // сначала ценность - не раньше 5-й тренировки
+    var d = S.donate, t = todayStr();
+    if (d.snoozeUntil && t < d.snoozeUntil) return;            // «Не сейчас» = 30 дней тишины
+    if (d.lastPromptAt && daysBetween(d.lastPromptAt, t) < 14) return;  // не чаще 1 раза в 14 дней
+    var victory = isNewBestSession(sess) || (count % 10 === 0);         // только в момент победы
+    if (!victory) return;
+    d.lastPromptAt = t; save();
+    openDonateSheet();
+  }
+  function openDonateSheet() {
+    openSheet('<p class="eyebrow">Поддержка</p><h2 style="margin-bottom:10px">Приложение живёт на поддержке</h2>' +
+      '<p class="muted" style="margin:0 0 16px">Здесь нет подписок и рекламы - я делаю трекер для себя и таких же, как мы. Если он помогает тебе расти, можешь поддержать разработку. Это добровольно и ни на что в приложении не влияет</p>' +
+      '<a class="btn" id="dn-yes" href="' + DONATE_URL + '" target="_blank" rel="noopener" style="text-decoration:none;display:flex;align-items:center;justify-content:center">Поддержать</a>' +
+      '<button class="btn ghost slim" id="dn-no" style="margin-top:10px">Не сейчас</button>');
+    $('#dn-yes').onclick = function () { closeSheet(); setTimeout(function () { toast('Спасибо, это правда помогает'); }, 250); };
+    $('#dn-no').onclick = function () { S.donate.snoozeUntil = addDays(todayStr(), 30); save(); closeSheet(); };
   }
 
   /* ---------- misc ---------- */
