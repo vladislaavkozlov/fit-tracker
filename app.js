@@ -455,14 +455,12 @@
       '<div id="e1rm-live" class="card" style="text-align:center;padding:12px;margin:4px 0 12px"></div>' +
       '<div class="field"><label>Как дался подход?</label>' + rpePickerHtml(logState.rpe) + '</div>' +
       '<div class="field"><input class="txt" id="as-note" placeholder="Заметка (напр. подстраховали)" value="' + escapeHtml(logState.note || '') + '"></div>' +
-      '<button class="btn" id="as-add">✓ Записать подход</button>' +
-      '<button class="btn ghost slim" id="as-done" style="margin-top:10px">Готово</button>');
+      '<button class="btn" id="as-add">✓ Записать подход</button>');
     $('#as-ex').onclick = function () { openExercisePicker(function (name, eq) { logState.exercise = name; logState.equipment = eq; openAddSet(date); }); };
     bindStepperEl($('#sheet'), logState, updateE1rmLive);
     bindRpe($('#sheet'), logState);
     $('#as-note').oninput = function () { logState.note = this.value; };
-    $('#as-add').onclick = function () { commitSet(date); toast('Подход записан'); openAddSet(date); };
-    $('#as-done').onclick = function () { closeSheet(); renderLogger(); };
+    $('#as-add').onclick = function () { commitSet(date); toast('Подход записан'); closeSheet(); renderLogger(); };
     updateE1rmLive();
   }
   function commitSet(date) {
