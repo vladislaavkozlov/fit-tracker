@@ -104,6 +104,8 @@
   }
   function sessionTonnage(sess) { return (sess.sets || []).reduce(function (s, x) { return s + setTonnage(x); }, 0); }
   function bestE1rmOf(sets) { var b = null; sets.forEach(function (x) { if (!isWorking(x)) return; var v = setE1rm(x); if (v != null && (b == null || v > b)) b = v; }); return b; }
+  // рабочий объём упражнения (вес × повторы по ВСЕМ рабочим подходам, без разминки и попыток) - основа динамики силы
+  function workingVolumeOf(sets) { return (sets || []).reduce(function (s, x) { return isWorking(x) ? s + setTonnage(x) : s; }, 0); }
   function weightPart(x) {
     var eq = setEquip(x);
     if (eq === 'dumbbell') return '2 × ' + x.weight + ' кг';
@@ -523,20 +525,23 @@
     });
     return groups;
   }
-  function prevSessionBest(sess, name) {
+  function prevSessionVolume(sess, name) {
     var earlier = S.sessions.filter(function (s) { return s.date < sess.date; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
     for (var i = earlier.length - 1; i >= 0; i--) {
-      var b = bestE1rmOf(earlier[i].sets.filter(function (x) { return x.exercise === name; }));
-      if (b != null) return { best: b, date: earlier[i].date };
+      var v = workingVolumeOf(earlier[i].sets.filter(function (x) { return x.exercise === name; }));
+      if (v > 0) return { vol: v, date: earlier[i].date };
     }
     return null;
   }
-  function exerciseArrow(sess, name, curBest) {
-    if (curBest == null) return null;
-    var prev = prevSessionBest(sess, name); if (!prev) return null;
-    var d = E.round(curBest - prev.best, 1);
+  // динамика силы по упражнению = сравнение СУММАРНОГО рабочего объёма (вес×повторы по всем подходам) сегодня и в прошлый раз,
+  // а не 1ПМ одного подхода - иначе доп. подход тем же весом/повторами не давал прироста
+  function exerciseArrow(sess, name, sets) {
+    var curVol = workingVolumeOf(sets);
+    if (curVol <= 0) return null;
+    var prev = prevSessionVolume(sess, name); if (!prev) return null;
+    var d = E.round(curVol - prev.vol, 1);
     var cls = d > 0.05 ? 'up' : d < -0.05 ? 'down' : 'flat';
-    return { sym: cls === 'up' ? '↑' : cls === 'down' ? '↓' : '→', cls: cls, prev: prev.best, cur: curBest, delta: d };
+    return { sym: cls === 'up' ? '↑' : cls === 'down' ? '↓' : '→', cls: cls, prev: E.round(prev.vol, 1), cur: E.round(curVol, 1), delta: d };
   }
   // лента тяжести подходов в свёрнутой строке: з/ж/к, разминка голубым, попытка контуром (спека v6)
   function rpeStripHtml(items) {
@@ -554,7 +559,7 @@
       var isOpen = !!openMap[g.exercise];
       var sets = g.items.map(function (o) { return o.set; });
       var best = bestE1rmOf(sets);
-      var arrow = exerciseArrow(sess, g.exercise, best);
+      var arrow = exerciseArrow(sess, g.exercise, sets);
       var wk = sets.filter(isWorking).length;
       var warm = sets.filter(isWarm).length;
       var tries = sets.length - wk - warm;
@@ -580,16 +585,16 @@
     $$(scope + ' .setrow').forEach(function (b) { b.onclick = function () { openEditSet(b.dataset.sid, +b.dataset.idx, afterEdit); }; });
   }
   function openArrowSheet(sess, name) {
-    var best = bestE1rmOf(sess.sets.filter(function (x) { return x.exercise === name; }));
-    var a = exerciseArrow(sess, name, best);
+    var sets = sess.sets.filter(function (x) { return x.exercise === name; });
+    var a = exerciseArrow(sess, name, sets);
     var body;
     if (!a) { body = '<p class="muted">Пока не с чем сравнить - это первая тренировка с этим упражнением. В следующий раз покажу динамику</p>'; }
     else {
       var pct = a.prev > 0 ? E.round(a.delta / a.prev * 100, 1) : 0;
       var word = a.cls === 'up' ? 'сильнее' : a.cls === 'down' ? 'слабее' : 'без изменений';
       body = '<div class="statrow" style="margin:6px 0 12px">' + stat('Прошлый раз', a.prev + ' кг') + stat('Сейчас', a.cur + ' кг') + '</div>' +
-        '<p class="' + (a.cls === 'up' ? 'muted' : 'muted') + '" style="margin:0">Расчётный 1ПМ ' + (a.delta >= 0 ? '+' : '') + a.delta + ' кг (' + (pct >= 0 ? '+' : '') + pct + '%) - ты стал ' + word + ' против прошлой тренировки этого упражнения</p>' +
-        '<p class="note-inline">Разминочные подходы в сравнение не идут. Общий прогноз тела по массе - на вкладке «Прогноз»</p>';
+        '<p class="' + (a.cls === 'up' ? 'muted' : 'muted') + '" style="margin:0">Общий рабочий объём (вес × повторы по всем рабочим подходам) ' + (a.delta >= 0 ? '+' : '') + a.delta + ' кг (' + (pct >= 0 ? '+' : '') + pct + '%) - ты стал ' + word + ' против прошлой тренировки этого упражнения</p>' +
+        '<p class="note-inline">Разминочные подходы и попытки в сравнение не идут. Общий прогноз тела по массе - на вкладке «Прогноз»</p>';
     }
     openSheet('<p class="eyebrow">' + escapeHtml(name) + '</p><h2 style="margin-bottom:6px">Динамика силы</h2>' + body +
       '<button class="btn" id="ar-stats" style="margin-top:14px">Открыть статистику</button>' +
